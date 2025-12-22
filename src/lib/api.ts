@@ -1,0 +1,20 @@
+const API_BASE = 'http://localhost:8787';
+
+export async function apiFetch(path: string, options: RequestInit = {}) {
+  const url = `${API_BASE}${path}`;
+  const response = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Something went wrong');
+  }
+
+  return response.json();
+}

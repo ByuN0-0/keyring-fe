@@ -1,65 +1,34 @@
-import Image from "next/image";
-
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-white">
+      <div className="absolute inset-0 -z-10 bg-[radial-gradient(45%_45%_at_50%_50%,#f0f9ff_0%,#ffffff_100%)]"></div>
+      
+      <main className="text-center px-6">
+        <div className="mb-6 inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
+          클라이언트 사이드 암호화 적용
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
+        
+        <h1 className="mb-6 text-6xl font-extrabold tracking-tight text-slate-900 sm:text-7xl">
+          안전한 <span className="text-blue-600">Keyring</span>
+        </h1>
+        
+        <p className="mx-auto mb-10 max-w-2xl text-lg text-slate-600 leading-relaxed">
+          Zero-Knowledge 기반의 비밀값 관리 솔루션입니다. 모든 데이터는 브라우저에서 AES-GCM 방식으로 암호화되며, 서버는 당신의 원문 데이터를 절대 알 수 없습니다.
+        </p>
+        
+        <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
           <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="/login"
+            className="flex h-12 w-full items-center justify-center rounded-xl bg-slate-900 px-8 text-sm font-bold text-white shadow-lg transition-all hover:bg-slate-800 sm:w-auto"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
+            로그인
           </a>
         </div>
       </main>
+      
+      <footer className="absolute bottom-8 text-sm text-slate-400 font-medium">
+        Hono, Next.js, WebCrypto 기술로 구축되었습니다.
+      </footer>
     </div>
   );
 }
