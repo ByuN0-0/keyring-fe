@@ -1,22 +1,58 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { encryptData, decryptData } from '@/lib/crypto';
 import Header from './Header';
-import Sidebar from './Sidebar';
+import Sidebar, { ScopeType, VaultScope } from './Sidebar';
 
-type Scope = 'provider' | 'project' | 'global';
+interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface VaultFragment {
+  scope_pk: string;
+  user_id: string;
+  encrypted_blob: string;
+  salt: string;
+  updated_at: string;
+  scope: ScopeType;
+  scope_id: string | null;
+}
+
+interface MeResponse {
+  user: User;
+  expiresAt: number;
+  fragments?: VaultFragment[];
+  scopes?: VaultScope[];
+}
+
+interface ScopesResponse {
+  scopes: VaultScope[];
+}
+
+interface FragmentsResponse {
+  fragments: VaultFragment[];
+}
+
+interface SuccessResponse {
+  success: boolean;
+}
 
 export default function DashboardPage() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [expiresAt, setExpiresAt] = useState<number>(0);
-  const [activeScope, setActiveScope] = useState<Scope>('provider');
+  const [activeType, setActiveType] = useState<ScopeType>('provider');
+  const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
+  const [scopes, setScopes] = useState<VaultScope[]>([]);
   const [passphrase, setPassphrase] = useState('');
-  const [fragments, setFragments] = useState<any[]>([]);
+  const [fragments, setFragments] = useState<VaultFragment[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
+  const [newScopeId, setNewScopeId] = useState('');
   const [showNewValue, setShowNewValue] = useState(false);
   const [decryptedValues, setDecryptedValues] = useState<Record<string, string>>({});
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
@@ -30,28 +66,43 @@ export default function DashboardPage() {
     global: '전역 설정'
   };
 
-  useEffect(() => {
-    init();
+  const fetchScopes = useCallback(async () => {
+    try {
+      const data = await apiFetch<ScopesResponse>('/vault/scopes');
+      setScopes(data.scopes);
+    } catch (err) {
+      console.error('Failed to fetch scopes', err);
+    }
   }, []);
 
-  const init = async () => {
+  const fetchFragments = useCallback(async () => {
     try {
-      const data = await apiFetch('/auth/me');
-      setUser(data.user);
-      setExpiresAt(data.expiresAt);
-      fetchFragments();
-    } catch (err: any) {
-      router.push('/login');
-    }
-  };
-
-  const fetchFragments = async () => {
-    try {
-      const data = await apiFetch('/vault');
+      const data = await apiFetch<FragmentsResponse>('/vault');
       setFragments(data.fragments);
-    } catch (err: any) {
+    } catch (err) {
       setError('데이터를 불러오는 중 오류가 발생했습니다.');
     }
+  }, []);
+
+  useEffect(() => {
+    const initDashboard = async () => {
+      try {
+        const data = await apiFetch<MeResponse>('/auth/me');
+        setUser(data.user);
+        setExpiresAt(data.expiresAt);
+        if (data.fragments) setFragments(data.fragments);
+        if (data.scopes) setScopes(data.scopes);
+      } catch (err) {
+        router.push('/login');
+      }
+    };
+    initDashboard();
+  }, [router]);
+
+  const handleScopeChange = (type: ScopeType, scopeId: string | null) => {
+    setActiveType(type);
+    setActiveScopeId(scopeId);
+    setNewScopeId(scopeId || '');
   };
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -62,11 +113,12 @@ export default function DashboardPage() {
     }
     try {
       const { encrypted_blob, salt } = await encryptData(newValue, passphrase);
-      await apiFetch('/vault', {
+      await apiFetch<SuccessResponse>('/vault', {
         method: 'POST',
         body: JSON.stringify({
           scope_pk: newKey,
-          scope: activeScope,
+          scope: activeType,
+          scope_id: newScopeId || null,
           encrypted_blob,
           salt,
         }),
@@ -75,13 +127,14 @@ export default function DashboardPage() {
       setNewValue('');
       setIsAdding(false);
       fetchFragments();
+      fetchScopes();
       setError('');
-    } catch (err: any) {
+    } catch (err) {
       setError('비밀값 저장에 실패했습니다. 입력 내용을 확인해주세요.');
     }
   };
 
-  const handleDecrypt = async (fragment: any) => {
+  const handleDecrypt = async (fragment: VaultFragment) => {
     if (!passphrase) {
       setError('비밀값을 복호화하려면 마스터 패스프레이즈가 필요합니다.');
       return;
@@ -91,7 +144,7 @@ export default function DashboardPage() {
       setDecryptedValues((prev) => ({ ...prev, [fragment.scope_pk]: decrypted }));
       setVisibleSecrets((prev) => ({ ...prev, [fragment.scope_pk]: true }));
       setError('');
-    } catch (err: any) {
+    } catch (err) {
       setError('복호화 실패: 패스프레이즈가 틀렸거나 데이터가 손상되었습니다.');
     }
   };
@@ -100,7 +153,11 @@ export default function DashboardPage() {
     setVisibleSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const filteredFragments = fragments.filter(f => (f.scope || 'global') === activeScope);
+  const filteredFragments = fragments.filter(f => {
+    const typeMatch = (f.scope || 'global') === activeType;
+    const idMatch = activeScopeId ? f.scope_id === activeScopeId : true;
+    return typeMatch && idMatch;
+  });
 
   if (!user) return (
     <div className="flex h-screen items-center justify-center bg-slate-50/50">
@@ -116,15 +173,22 @@ export default function DashboardPage() {
       <Header userName={user.name} expiresAt={expiresAt} />
       
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar activeScope={activeScope} onScopeChange={setActiveScope} />
+        <Sidebar 
+          activeType={activeType} 
+          activeScopeId={activeScopeId} 
+          onScopeChange={handleScopeChange}
+          scopes={scopes}
+        />
         
         <main className="flex-1 overflow-y-auto bg-slate-50/20 p-8">
           <div className="mx-auto max-w-5xl">
             {/* Page Title & Actions */}
             <div className="mb-10 flex items-end justify-between">
               <div>
-                <h2 className="text-3xl font-extrabold tracking-tight text-slate-900">{scopeNames[activeScope]}</h2>
-                <p className="mt-1 text-slate-500 font-medium">안전하게 보관된 {scopeNames[activeScope]}의 비밀값 목록입니다.</p>
+                <h2 className="text-3xl font-extrabold tracking-tight text-slate-900">
+                  {scopeNames[activeType]} {activeScopeId && <span className="text-blue-600 ml-2">› {activeScopeId}</span>}
+                </h2>
+                <p className="mt-1 text-slate-500 font-medium">안전하게 보관된 {activeScopeId || scopeNames[activeType]}의 비밀값 목록입니다.</p>
               </div>
               <button 
                 onClick={() => setIsAdding(!isAdding)}
@@ -164,7 +228,17 @@ export default function DashboardPage() {
             {isAdding && (
               <div className="card mb-8 animate-in fade-in slide-in-from-top-4 p-6 border-slate-200 shadow-md duration-300">
                 <h3 className="mb-5 font-bold text-slate-900">새로운 비밀값 생성</h3>
-                <form onSubmit={handleAdd} className="grid grid-cols-1 gap-5 md:grid-cols-3">
+                <form onSubmit={handleAdd} className="grid grid-cols-1 gap-5 md:grid-cols-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">세부 분류 (Scope ID)</label>
+                    <input
+                      type="text"
+                      placeholder="예: AWS, ProjectA"
+                      className="input-field border-slate-300"
+                      value={newScopeId}
+                      onChange={(e) => setNewScopeId(e.target.value)}
+                    />
+                  </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">키 이름 (Key)</label>
                     <input

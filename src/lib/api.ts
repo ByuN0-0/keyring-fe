@@ -1,6 +1,6 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
 
-export async function apiFetch(path: string, options: RequestInit = {}) {
+export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${path}`;
   const response = await fetch(url, {
     ...options,
@@ -16,5 +16,5 @@ export async function apiFetch(path: string, options: RequestInit = {}) {
     throw new Error(error.error || 'Something went wrong');
   }
 
-  return response.json();
+  return response.json() as Promise<T>;
 }
