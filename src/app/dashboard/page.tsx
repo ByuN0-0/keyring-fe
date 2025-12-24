@@ -52,13 +52,14 @@ export default function DashboardPage() {
   const [fragments, setFragments] = useState<VaultFragment[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
-  const [newScopeId, setNewScopeId] = useState('');
   const [showNewValue, setShowNewValue] = useState(false);
   const [decryptedValues, setDecryptedValues] = useState<Record<string, string>>({});
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const router = useRouter();
+
+  const activeScope = scopes.find(s => s.id === activeScopeId);
 
   const scopeNames = {
     provider: '서비스 공급자',
@@ -102,7 +103,6 @@ export default function DashboardPage() {
   const handleScopeChange = (type: ScopeType, scopeId: string | null) => {
     setActiveType(type);
     setActiveScopeId(scopeId);
-    setNewScopeId(scopeId || '');
   };
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -111,14 +111,17 @@ export default function DashboardPage() {
       setError('데이터 암호화를 위해 마스터 패스프레이즈를 먼저 입력해주세요.');
       return;
     }
+    if (!activeScopeId) {
+      setError('비밀값을 추가할 탭을 먼저 선택하거나 생성해주세요.');
+      return;
+    }
     try {
       const { encrypted_blob, salt } = await encryptData(newValue, passphrase);
       await apiFetch<SuccessResponse>('/vault', {
         method: 'POST',
         body: JSON.stringify({
-          scope_pk: newKey,
-          scope: activeType,
-          scope_id: newScopeId || null,
+          scope_uuid: activeScopeId,
+          key_name: newKey,
           encrypted_blob,
           salt,
         }),
@@ -127,7 +130,6 @@ export default function DashboardPage() {
       setNewValue('');
       setIsAdding(false);
       fetchFragments();
-      fetchScopes();
       setError('');
     } catch (err) {
       setError('비밀값 저장에 실패했습니다. 입력 내용을 확인해주세요.');
@@ -154,9 +156,10 @@ export default function DashboardPage() {
   };
 
   const filteredFragments = fragments.filter(f => {
-    const typeMatch = (f.scope || 'global') === activeType;
-    const idMatch = activeScopeId ? f.scope_id === activeScopeId : true;
-    return typeMatch && idMatch;
+    if (!activeScopeId) {
+      return (f.scope || 'global') === activeType && !f.scope_id;
+    }
+    return f.scope_pk.startsWith(`${activeScopeId}:`);
   });
 
   if (!user) return (
@@ -178,6 +181,7 @@ export default function DashboardPage() {
           activeScopeId={activeScopeId} 
           onScopeChange={handleScopeChange}
           scopes={scopes}
+          onRefreshScopes={fetchScopes}
         />
         
         <main className="flex-1 overflow-y-auto bg-slate-50/20 p-8">
@@ -186,9 +190,9 @@ export default function DashboardPage() {
             <div className="mb-10 flex items-end justify-between">
               <div>
                 <h2 className="text-3xl font-extrabold tracking-tight text-slate-900">
-                  {scopeNames[activeType]} {activeScopeId && <span className="text-blue-600 ml-2">› {activeScopeId}</span>}
+                  {scopeNames[activeType]} {activeScope && <span className="text-blue-600 ml-2">› {activeScope.scope_id}</span>}
                 </h2>
-                <p className="mt-1 text-slate-500 font-medium">안전하게 보관된 {activeScopeId || scopeNames[activeType]}의 비밀값 목록입니다.</p>
+                <p className="mt-1 text-slate-500 font-medium">안전하게 보관된 {activeScope?.scope_id || scopeNames[activeType]}의 비밀값 목록입니다.</p>
               </div>
               <button 
                 onClick={() => setIsAdding(!isAdding)}
@@ -228,17 +232,7 @@ export default function DashboardPage() {
             {isAdding && (
               <div className="card mb-8 animate-in fade-in slide-in-from-top-4 p-6 border-slate-200 shadow-md duration-300">
                 <h3 className="mb-5 font-bold text-slate-900">새로운 비밀값 생성</h3>
-                <form onSubmit={handleAdd} className="grid grid-cols-1 gap-5 md:grid-cols-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">세부 분류 (Scope ID)</label>
-                    <input
-                      type="text"
-                      placeholder="예: AWS, ProjectA"
-                      className="input-field border-slate-300"
-                      value={newScopeId}
-                      onChange={(e) => setNewScopeId(e.target.value)}
-                    />
-                  </div>
+                <form onSubmit={handleAdd} className="grid grid-cols-1 gap-5 md:grid-cols-3">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">키 이름 (Key)</label>
                     <input
