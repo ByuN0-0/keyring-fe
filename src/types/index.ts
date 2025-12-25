@@ -13,8 +13,9 @@ export interface SessionInfo {
 
 export interface VaultScope {
   id: string;
-  scope: "global" | "provider" | "project";
+  scope: 'global' | 'provider' | 'project';
   scope_id: string | null;
+  sort_order: number;
 }
 
 export interface VaultFragment {

@@ -107,7 +107,7 @@ export function DashboardContent() {
     try {
       const { encrypted_blob, salt } = await encryptData(newValue, passphrase);
       await vaultService.upsertFragment({
-        scope_uuid: activeScopeId!,
+        scope_uuid: activeScopeId || "global",
         key_name: newKey,
         encrypted_blob,
         salt,
@@ -145,14 +145,20 @@ export function DashboardContent() {
   };
 
   const filteredFragments = session.fragments.filter((f) => {
-    const matchesScope = activeScopeId
-      ? f.scope_pk.startsWith(`${activeScopeId}:`)
-      : (f.scope || "global") === activeType && !f.scope_id;
+    let matchesScope = false;
+    if (activeType === "global") {
+      matchesScope = (f.scope || "global") === "global";
+    } else if (activeScopeId) {
+      matchesScope = f.scope_pk.startsWith(`${activeScopeId}:`);
+    }
+
     const matchesSearch = f.scope_pk
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
     return matchesScope && matchesSearch;
   });
+
+  const canAdd = activeType === "global" || !!activeScopeId;
 
   return (
     <div className="flex h-screen flex-col bg-[#F8FAFC] text-slate-900">
@@ -190,6 +196,7 @@ export function DashboardContent() {
               <div className="flex items-center gap-3">
                 <div className="relative group">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+
                   <Input
                     placeholder="Search secrets..."
                     className="w-64 pl-10 bg-white border-slate-200 focus:ring-indigo-500 rounded-xl"
@@ -197,12 +204,15 @@ export function DashboardContent() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
-                <Button
-                  onClick={() => setIsAdding(!isAdding)}
-                  className="rounded-xl bg-indigo-600 px-6 font-bold text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
-                >
-                  <Plus className="mr-2 h-4 w-4" /> Add Item
-                </Button>
+
+                {canAdd && (
+                  <Button
+                    onClick={() => setIsAdding(!isAdding)}
+                    className="rounded-xl bg-indigo-600 px-6 font-bold text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
+                  >
+                    <Plus className="mr-2 h-4 w-4" /> Add Item
+                  </Button>
+                )}
               </div>
             </div>
 

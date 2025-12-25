@@ -29,7 +29,11 @@ export const vaultService = {
     encrypted_blob: string;
     salt: string;
   }): Promise<{ success: boolean }> {
-    const { data } = await axiosClient.post("/vault", payload);
+    const { data } = await axiosClient.post('/vault', payload);
     return data;
+  },
+
+  async updateScopeOrder(scopeOrders: { id: string, sort_order: number }[]): Promise<void> {
+    await axiosClient.post('/vault/scopes/reorder', { scopeOrders });
   },
 };
