@@ -1,24 +1,27 @@
-export async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+export async function deriveKey(
+  passphrase: string,
+  salt: Uint8Array
+): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const passphraseKey = await window.crypto.subtle.importKey(
-    'raw',
+    "raw",
     encoder.encode(passphrase),
-    { name: 'PBKDF2' },
+    { name: "PBKDF2" },
     false,
-    ['deriveKey']
+    ["deriveKey"]
   );
 
   return window.crypto.subtle.deriveKey(
     {
-      name: 'PBKDF2',
+      name: "PBKDF2",
       salt: salt as BufferSource,
       iterations: 100000,
-      hash: 'SHA-256',
+      hash: "SHA-256",
     },
     passphraseKey,
-    { name: 'AES-GCM', length: 256 },
+    { name: "AES-GCM", length: 256 },
     false,
-    ['encrypt', 'decrypt']
+    ["encrypt", "decrypt"]
   );
 }
 
@@ -28,7 +31,7 @@ export async function encryptData(data: string, passphrase: string) {
   const key = await deriveKey(passphrase, salt);
   const encoder = new TextEncoder();
   const encryptedContent = await window.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: "AES-GCM", iv },
     key,
     encoder.encode(data)
   );
@@ -43,7 +46,11 @@ export async function encryptData(data: string, passphrase: string) {
   };
 }
 
-export async function decryptData(encryptedHex: string, saltHex: string, passphrase: string) {
+export async function decryptData(
+  encryptedHex: string,
+  saltHex: string,
+  passphrase: string
+) {
   const salt = hexToBuf(saltHex);
   const encryptedBlob = hexToBuf(encryptedHex);
   const iv = encryptedBlob.slice(0, 12);
@@ -51,7 +58,7 @@ export async function decryptData(encryptedHex: string, saltHex: string, passphr
 
   const key = await deriveKey(passphrase, salt);
   const decryptedContent = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
+    { name: "AES-GCM", iv },
     key,
     data
   );
@@ -61,8 +68,8 @@ export async function decryptData(encryptedHex: string, saltHex: string, passphr
 
 function bufToHex(buf: Uint8Array) {
   return Array.from(buf)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function hexToBuf(hex: string) {
