@@ -12,8 +12,8 @@ import {
   FolderKanban,
   Globe,
   Plus,
-  ChevronRight,
   type LucideIcon,
+  Hash,
 } from "lucide-react";
 
 interface AppSidebarProps {
@@ -35,15 +35,14 @@ export function AppSidebar({
   const [newScopeName, setNewScopeName] = useState("");
 
   const menuItems: { id: ScopeType; label: string; icon: LucideIcon }[] = [
-    { id: "provider", label: "서비스 공급자", icon: Building2 },
-    { id: "project", label: "프로젝트", icon: FolderKanban },
-    { id: "global", label: "전역 설정", icon: Globe },
+    { id: "provider", label: "Cloud Providers", icon: Building2 },
+    { id: "project", label: "Projects", icon: FolderKanban },
+    { id: "global", label: "Global Vault", icon: Globe },
   ];
 
   const handleAddScope = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newScopeName || !addingTo) return;
-
     try {
       await vaultService.createScope(addingTo, newScopeName);
       setNewScopeName("");
@@ -55,59 +54,64 @@ export function AppSidebar({
   };
 
   return (
-    <aside className="w-64 border-r bg-muted/30 p-4">
-      <div className="mb-6 px-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-        Vault Storage
+    <aside className="w-72 border-r border-slate-100 bg-white p-6 overflow-y-auto">
+      <div className="mb-10 px-4">
+        <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
+          Main Categories
+        </h3>
       </div>
-      <nav className="space-y-6">
+
+      <nav className="space-y-10">
         {menuItems.map((item) => (
-          <div key={item.id} className="space-y-2">
-            <div className="flex items-center justify-between">
+          <div key={item.id} className="space-y-4">
+            <div className="flex items-center justify-between group px-1">
               <button
                 onClick={() => onScopeChange(item.id, null)}
                 className={cn(
-                  "flex flex-1 items-center gap-3 rounded-lg px-3 py-2 text-sm font-semibold transition-all",
+                  "flex flex-1 items-center gap-3 py-1.5 text-sm font-bold transition-all",
                   activeType === item.id && activeScopeId === null
-                    ? "bg-card text-foreground shadow-sm ring-1 ring-border"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    ? "text-indigo-600"
+                    : "text-slate-500 hover:text-slate-900"
                 )}
               >
-                <item.icon
+                <div
                   className={cn(
-                    "h-4 w-4",
+                    "flex h-9 w-9 items-center justify-center rounded-xl transition-all",
                     activeType === item.id && activeScopeId === null
-                      ? "text-primary"
-                      : ""
+                      ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100"
+                      : "bg-slate-50 text-slate-400 group-hover:bg-slate-100 group-hover:text-slate-600"
                   )}
-                />
+                >
+                  <item.icon className="h-4 w-4" />
+                </div>
                 {item.label}
               </button>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8"
+                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg hover:bg-slate-100"
                 onClick={() =>
                   setAddingTo(addingTo === item.id ? null : item.id)
                 }
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-4 w-4 text-slate-400" />
               </Button>
             </div>
 
-            {addingTo === item.id && (
-              <form onSubmit={handleAddScope} className="ml-9 pr-1">
-                <Input
-                  autoFocus
-                  placeholder="새 탭 이름"
-                  className="h-8 text-xs"
-                  value={newScopeName}
-                  onChange={(e) => setNewScopeName(e.target.value)}
-                  onBlur={() => !newScopeName && setAddingTo(null)}
-                />
-              </form>
-            )}
+            <div className="ml-5 border-l-2 border-slate-50 pl-4 space-y-1">
+              {addingTo === item.id && (
+                <form onSubmit={handleAddScope} className="mb-2">
+                  <Input
+                    autoFocus
+                    placeholder="New scope..."
+                    className="h-9 text-xs bg-slate-50 border-none rounded-lg focus:ring-2 focus:ring-indigo-500/20"
+                    value={newScopeName}
+                    onChange={(e) => setNewScopeName(e.target.value)}
+                    onBlur={() => !newScopeName && setAddingTo(null)}
+                  />
+                </form>
+              )}
 
-            <div className="ml-9 space-y-1">
               {scopes
                 .filter((s) => s.scope === item.id)
                 .map((s) => (
@@ -115,21 +119,30 @@ export function AppSidebar({
                     key={s.id}
                     onClick={() => onScopeChange(item.id, s.id)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-semibold transition-all group/item",
                       activeScopeId === s.id
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                        ? "text-indigo-600 bg-indigo-50/50 shadow-sm"
+                        : "text-slate-400 hover:text-slate-700 hover:bg-slate-50/50"
                     )}
                   >
-                    <ChevronRight
+                    <Hash
                       className={cn(
-                        "h-3 w-3",
-                        activeScopeId === s.id ? "opacity-100" : "opacity-0"
+                        "h-3.5 w-3.5",
+                        activeScopeId === s.id
+                          ? "text-indigo-600"
+                          : "text-slate-300 group-hover/item:text-slate-400"
                       )}
                     />
                     {s.scope_id}
                   </button>
                 ))}
+
+              {scopes.filter((s) => s.scope === item.id).length === 0 &&
+                !addingTo && (
+                  <p className="py-2 text-[11px] text-slate-300 font-medium italic">
+                    Empty storage
+                  </p>
+                )}
             </div>
           </div>
         ))}

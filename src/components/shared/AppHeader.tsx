@@ -5,9 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { authService } from "@/services/authService";
 import { User } from "@/types";
-import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
-import { LogOut, Timer } from "lucide-react";
+import { Bell, User as UserIcon } from "lucide-react";
 
 export function AppHeader({
   user,
@@ -41,31 +39,52 @@ export function AppHeader({
   };
 
   return (
-    <header className="flex h-16 items-center justify-between border-b bg-card px-6">
-      <div className="flex items-center gap-3">
-        <Image
-          src="/keyring.png"
-          alt="Keyring Logo"
-          width={32}
-          height={32}
-          className="rounded-lg"
-        />
-        <span className="font-bold tracking-tight text-lg">KEYRING</span>
+    <header className="flex h-20 items-center justify-between border-b border-slate-100 bg-white px-10 shadow-sm z-50">
+      <div className="flex items-center gap-4">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-indigo-100">
+          <Image src="/keyring.png" alt="Logo" width={32} height={32} />
+        </div>
+        <div className="flex flex-col">
+          <span className="text-xl font-black tracking-tight text-slate-900 uppercase">
+            Keyring
+          </span>
+          <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+            Secure Vault
+          </span>
+        </div>
       </div>
 
-      <div className="flex items-center gap-6">
-        <Badge
-          variant="outline"
-          className="font-mono flex items-center gap-2 py-1"
-        >
-          <Timer className="h-3 w-3" /> {timeLeft}
-        </Badge>
+      <div className="flex items-center gap-8">
+        <div className="flex items-center gap-3 rounded-2xl bg-slate-50 border border-slate-100 px-4 py-2">
+          <div className="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse" />
+          <span className="text-xs font-black font-mono text-slate-600 tracking-wider">
+            SECURE SESSION: {timeLeft}
+          </span>
+        </div>
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium">{user.name}님</span>
-          <Button variant="ghost" size="sm" onClick={handleLogout}>
-            <LogOut className="h-4 w-4 mr-2" /> 로그아웃
-          </Button>
+        <div className="h-8 w-px bg-slate-100" />
+
+        <div className="flex items-center gap-5">
+          <button className="text-slate-400 hover:text-slate-900 transition-colors">
+            <Bell className="h-5 w-5" />
+          </button>
+
+          <div className="flex items-center gap-3 pl-2 group cursor-pointer">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-all">
+              <UserIcon className="h-5 w-5" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-black text-slate-900">
+                {user.name}
+              </span>
+              <button
+                onClick={handleLogout}
+                className="text-[10px] font-bold text-slate-400 text-left hover:text-red-500 transition-colors"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </header>
