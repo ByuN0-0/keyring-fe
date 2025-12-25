@@ -36,4 +36,8 @@ export const vaultService = {
   async updateScopeOrder(scopeOrders: { id: string, sort_order: number }[]): Promise<void> {
     await axiosClient.post('/vault/scopes/reorder', { scopeOrders });
   },
+
+  async deleteScope(id: string): Promise<void> {
+    await axiosClient.delete(`/vault/scopes/${id}`);
+  },
 };
