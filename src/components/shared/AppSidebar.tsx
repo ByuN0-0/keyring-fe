@@ -1,21 +1,16 @@
-"use client";
-
-import { useState } from "react";
-import { vaultService } from "@/services/vaultService";
-import { VaultScope } from "@/types";
-import { ScopeType } from "./DashboardContent";
+import { folderService } from "@/services/folderService";
+import { Folder } from "@/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import {
-  Building2,
-  FolderKanban,
-  Globe,
-  Plus,
+  Folder as FolderIcon,
   ChevronRight,
   ChevronDown,
-  type LucideIcon,
+  Plus,
   Trash2,
+  LayoutDashboard,
+  GripVertical,
 } from "lucide-react";
 import {
   DndContext,
@@ -24,6 +19,9 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  DragOverlay,
+  defaultDropAnimationSideEffects,
+  DragStartEvent,
   DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -34,28 +32,38 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useState } from "react";
 
 interface AppSidebarProps {
-  activeType: ScopeType;
-  activeScopeId: string | null;
-  onScopeChange: (type: ScopeType, scopeId: string | null) => void;
-  scopes: VaultScope[];
+  activeFolderId: string | null;
+  onFolderSelect: (folderId: string | null) => void;
+  folders: Folder[];
   onRefresh: () => void;
 }
 
-function SortableScopeItem({
-  scope,
-  activeScopeId,
-  onScopeChange,
-  activeType,
+function NavItem({
+  folder,
+  activeFolderId,
+  onFolderSelect,
+  allFolders,
   onDelete,
+  onRefresh,
+  isOverlay = false,
 }: {
-  scope: VaultScope;
-  activeScopeId: string | null;
-  onScopeChange: (type: ScopeType, scopeId: string | null) => void;
-  activeType: ScopeType;
+  folder: Folder;
+  activeFolderId: string | null;
+  onFolderSelect: (folderId: string | null) => void;
+  allFolders: Folder[];
   onDelete: (id: string) => void;
+  onRefresh: () => void;
+  isOverlay?: boolean;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isAddingSub, setIsAddingSub] = useState(false);
+  const [newSubName, setNewSubName] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(folder.name);
+
   const {
     attributes,
     listeners,
@@ -63,70 +71,217 @@ function SortableScopeItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: scope.id });
+  } = useSortable({ id: folder.id });
 
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Translate.toString(transform),
     transition,
-    zIndex: isDragging ? 10 : 1,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.4 : 1,
+  };
+
+  const children = allFolders
+    .filter((f) => f.parent_id === folder.id)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded(!isExpanded);
+  };
+
+  const handleSelect = () => {
+    onFolderSelect(folder.id);
+    setIsExpanded(true);
+  };
+
+  const handleAddSub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubName) return;
+    try {
+      const parentChildren = allFolders.filter(
+        (f) => f.parent_id === folder.id
+      );
+      const maxSortOrder = Math.max(
+        0,
+        ...parentChildren.map((f) => f.sort_order || 0)
+      );
+
+      await folderService.createFolder({
+        name: newSubName,
+        parent_id: folder.id,
+        sort_order: maxSortOrder + 1,
+      });
+      setNewSubName("");
+      setIsAddingSub(false);
+      setIsExpanded(true);
+      onRefresh();
+    } catch (err) {
+      console.error("Failed to add subfolder", err);
+    }
+  };
+
+  const handleRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editName || editName === folder.name) {
+      setIsEditing(false);
+      setEditName(folder.name);
+      return;
+    }
+    try {
+      await folderService.updateFolder(folder.id, {
+        name: editName,
+      });
+      setIsEditing(false);
+      onRefresh();
+    } catch (err) {
+      console.error("Failed to rename folder", err);
+      setEditName(folder.name);
+      setIsEditing(false);
+    }
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-      className={cn(
-        "group/item flex items-center gap-3 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all cursor-pointer active:cursor-grabbing",
-        activeScopeId === scope.id
-          ? "text-indigo-600 bg-indigo-50/50 shadow-sm"
-          : "text-slate-400 hover:text-slate-700 hover:bg-slate-50/50"
-      )}
-      onClick={() => onScopeChange(activeType, scope.id)}
-    >
-      <span className="flex-1 truncate">{scope.scope_id}</span>
-      <button
-        onClick={(e) => {
+    <div ref={setNodeRef} style={style} className="space-y-0.5">
+      <div
+        className={cn(
+          "group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors cursor-pointer",
+          activeFolderId === folder.id
+            ? "bg-slate-100 text-slate-900 font-semibold"
+            : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
+          isOverlay && "bg-white shadow-lg ring-1 ring-slate-200"
+        )}
+        onClick={handleSelect}
+        onDoubleClick={(e) => {
           e.stopPropagation();
-          if (
-            confirm(
-              "이 보관소와 내부의 모든 비밀값이 삭제됩니다. 계속하시겠습니까?"
-            )
-          ) {
-            onDelete(scope.id);
-          }
+          setIsEditing(true);
         }}
-        className="opacity-0 group-hover/item:opacity-100 p-1 text-slate-300 hover:text-red-500 transition-all pointer-events-auto"
       >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+        <div
+          {...attributes}
+          {...listeners}
+          className="p-1 -ml-1 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-opacity"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <GripVertical className="h-3 w-3" />
+        </div>
+
+        <div className="flex items-center justify-center w-4 h-4">
+          {children.length > 0 && (
+            <button
+              onClick={handleToggle}
+              className="p-0.5 hover:bg-slate-200 rounded transition-colors"
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+            </button>
+          )}
+          {children.length === 0 && (
+            <ChevronRight className="h-3 w-3 opacity-0" />
+          )}
+        </div>
+
+        <FolderIcon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0",
+            activeFolderId === folder.id ? "text-indigo-500" : "text-slate-400"
+          )}
+        />
+
+        {isEditing ? (
+          <form
+            onSubmit={handleRename}
+            className="flex-1 min-w-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Input
+              autoFocus
+              className="h-6 py-0 px-1 text-[13px] rounded border-slate-200 focus:ring-1"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onBlur={() => setIsEditing(false)}
+            />
+          </form>
+        ) : (
+          <span className="flex-1 truncate text-[13px]">{folder.name}</span>
+        )}
+
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsAddingSub(true);
+              setIsExpanded(true);
+            }}
+            className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200 rounded transition-all"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm("정말 삭제하시겠습니까?")) {
+                onDelete(folder.id);
+              }
+            }}
+            className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+
+      {(isExpanded || isAddingSub) && !isOverlay && (
+        <div className="ml-3.5 border-l border-slate-100 pl-2 space-y-0.5">
+          {isAddingSub && (
+            <form onSubmit={handleAddSub} className="px-2 mb-1 text-black">
+              <Input
+                autoFocus
+                placeholder="New subfolder..."
+                className="h-7 text-xs rounded-md border-slate-200 bg-white"
+                value={newSubName}
+                onChange={(e) => setNewSubName(e.target.value)}
+                onBlur={() => !newSubName && setIsAddingSub(false)}
+              />
+            </form>
+          )}
+          <SortableContext
+            items={children.map((c) => c.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {children.map((child) => (
+              <NavItem
+                key={child.id}
+                folder={child}
+                activeFolderId={activeFolderId}
+                onFolderSelect={onFolderSelect}
+                allFolders={allFolders}
+                onDelete={onDelete}
+                onRefresh={onRefresh}
+              />
+            ))}
+          </SortableContext>
+        </div>
+      )}
     </div>
   );
 }
 
 export function AppSidebar({
-  activeType,
-  activeScopeId,
-  onScopeChange,
-  scopes,
+  activeFolderId,
+  onFolderSelect,
+  folders,
   onRefresh,
 }: AppSidebarProps) {
-  const [expandedTypes, setExpandedTypes] = useState<
-    Record<ScopeType, boolean>
-  >({
-    provider: true,
-    project: true,
-    global: true,
-  });
-  const [addingTo, setAddingTo] = useState<ScopeType | null>(null);
-  const [newScopeName, setNewScopeName] = useState("");
+  const [isAddingRoot, setIsAddingRoot] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8, // 8px 이상 움직여야 드래그 시작 (그 전엔 클릭으로 인식)
+        distance: 8,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -134,191 +289,222 @@ export function AppSidebar({
     })
   );
 
-  const menuItems: { id: ScopeType; label: string; icon: LucideIcon }[] = [
-    { id: "provider", label: "Cloud Providers", icon: Building2 },
-    { id: "project", label: "Projects", icon: FolderKanban },
-    { id: "global", label: "Global Vault", icon: Globe },
-  ];
+  const rootFolders = folders
+    .filter((f) => f.parent_id === null)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-  const toggleExpand = (type: ScopeType) => {
-    setExpandedTypes((prev) => ({ ...prev, [type]: !prev[type] }));
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
   };
 
-  const handleAddScope = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newScopeName || !addingTo) return;
-    try {
-      await vaultService.createScope(addingTo, newScopeName);
-      setNewScopeName("");
-      setAddingTo(null);
-      onRefresh();
-      setExpandedTypes((prev) => ({ ...prev, [addingTo]: true }));
-    } catch (err) {
-      console.error("Failed to add scope", err);
-    }
-  };
-
-  const handleDeleteScope = async (id: string) => {
-    try {
-      await vaultService.deleteScope(id);
-      if (activeScopeId === id) {
-        onScopeChange(activeType, null);
-      }
-      onRefresh();
-    } catch (err) {
-      console.error("Failed to delete scope", err);
-    }
-  };
-
-  const handleDragEnd = async (event: DragEndEvent, type: ScopeType) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const typeScopes = scopes.filter((s) => s.scope === type);
-      const oldIndex = typeScopes.findIndex((s) => s.id === active.id);
-      const newIndex = typeScopes.findIndex((s) => s.id === over.id);
+    setActiveId(null);
 
-      const newTypeScopes = arrayMove(typeScopes, oldIndex, newIndex);
-      const updatedOrders = newTypeScopes.map((s, idx) => ({
-        id: s.id,
-        sort_order: idx,
-      }));
+    if (!over) return;
 
-      try {
-        await vaultService.updateScopeOrder(updatedOrders);
-        onRefresh();
-      } catch (err) {
-        console.error("Failed to reorder scopes", err);
+    const activeNode = folders.find((f) => f.id === active.id);
+    const overNode = folders.find((f) => f.id === over.id);
+
+    if (!activeNode || !overNode) return;
+
+    // Cases:
+    // 1. Moving to a different parent (over is a folder, but not for sorting)
+    //    Actually dnd-kit-sortable is mostly for sorting within same level.
+    //    For nested DND, we need more complex logic.
+    //    Simplified: If same level, reorder. If different level, change parent.
+
+    if (active.id !== over.id) {
+      if (activeNode.parent_id === overNode.parent_id) {
+        // Reorder within same parent
+        const sameLevelFolders = folders
+          .filter((f) => f.parent_id === activeNode.parent_id)
+          .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+        const oldIndex = sameLevelFolders.findIndex((f) => f.id === active.id);
+        const newIndex = sameLevelFolders.findIndex((f) => f.id === over.id);
+
+        const newOrder = arrayMove(sameLevelFolders, oldIndex, newIndex);
+
+        // Update all affected sort_orders
+        try {
+          await Promise.all(
+            newOrder.map((f, index) =>
+              folderService.updateFolder(f.id, { sort_order: index })
+            )
+          );
+          onRefresh();
+        } catch (err) {
+          console.error("Failed to reorder folders", err);
+        }
+      } else {
+        // Change parent
+        try {
+          // Check for circular reference
+          let currentParent = overNode.parent_id;
+          while (currentParent) {
+            if (currentParent === activeNode.id) {
+              console.error("Circular folder reference detected");
+              return;
+            }
+            const parent = folders.find((f) => f.id === currentParent);
+            currentParent = parent?.parent_id || null;
+          }
+
+          const targetChildren = folders.filter(
+            (f) => f.parent_id === overNode.id
+          );
+          const maxOrder = Math.max(
+            0,
+            ...targetChildren.map((f) => f.sort_order || 0)
+          );
+
+          await folderService.updateFolder(activeNode.id, {
+            parent_id: overNode.id,
+            sort_order: maxOrder + 1,
+          });
+          onRefresh();
+        } catch (err) {
+          console.error("Failed to move folder", err);
+        }
       }
+    }
+  };
+
+  const handleAddRootFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName) return;
+    try {
+      const maxSortOrder = Math.max(
+        0,
+        ...rootFolders.map((f) => f.sort_order || 0)
+      );
+      await folderService.createFolder({
+        name: newFolderName,
+        parent_id: null,
+        sort_order: maxSortOrder + 1,
+      });
+      setNewFolderName("");
+      setIsAddingRoot(false);
+      onRefresh();
+    } catch (err) {
+      console.error("Failed to add folder", err);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await folderService.deleteFolder(id);
+      if (activeFolderId === id) onFolderSelect(null);
+      onRefresh();
+    } catch (err) {
+      console.error("Failed to delete folder", err);
     }
   };
 
   return (
-    <aside className="w-72 border-r border-slate-100 bg-white p-6 overflow-y-auto select-none">
-      <nav className="space-y-8">
-        {menuItems.map((item) => {
-          const categoryScopes = scopes.filter((s) => s.scope === item.id);
-          const isExpanded = expandedTypes[item.id];
+    <aside className="w-72 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none">
+      <div className="p-6 space-y-6 flex-1 overflow-y-auto">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between px-2">
+            <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">
+              Vault Workspace
+            </h3>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 rounded-lg hover:bg-slate-100"
+              onClick={() => setIsAddingRoot(!isAddingRoot)}
+            >
+              <Plus className="h-4 w-4 text-slate-400" />
+            </Button>
+          </div>
 
-          return (
-            <div key={`category-${item.id}`} className="space-y-3">
-              <div className="flex items-center justify-between group px-1">
-                <button
-                  onClick={() => {
-                    if (item.id === "global") {
-                      onScopeChange(item.id, null);
-                    } else {
-                      toggleExpand(item.id);
-                    }
-                  }}
-                  className={cn(
-                    "flex flex-1 items-center gap-3 py-1.5 text-sm font-bold transition-all",
-                    activeType === item.id &&
-                      (item.id === "global" ? activeScopeId === null : true)
-                      ? "text-indigo-600"
-                      : "text-slate-500 hover:text-slate-900"
-                  )}
+          <nav className="space-y-1">
+            <div
+              className={cn(
+                "flex items-center gap-3 rounded-xl px-4 py-2 text-sm font-bold transition-all cursor-pointer",
+                activeFolderId === null
+                  ? "text-indigo-600 bg-indigo-50 shadow-sm"
+                  : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+              )}
+              onClick={() => onFolderSelect(null)}
+            >
+              <LayoutDashboard className="h-4 w-4" />
+              <span>Vault Root</span>
+            </div>
+
+            <div className="pt-4 space-y-1">
+              {isAddingRoot && (
+                <form onSubmit={handleAddRootFolder} className="px-2 mb-2">
+                  <Input
+                    autoFocus
+                    placeholder="Folder name..."
+                    className="h-8 text-xs rounded-lg border-slate-200"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    onBlur={() => !newFolderName && setIsAddingRoot(false)}
+                  />
+                </form>
+              )}
+
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={rootFolders.map((f) => f.id)}
+                  strategy={verticalListSortingStrategy}
                 >
-                  <div className="relative">
-                    <div
-                      className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-lg transition-all",
-                        activeType === item.id &&
-                          (item.id === "global" ? activeScopeId === null : true)
-                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
-                          : "bg-slate-50 text-slate-400 group-hover:bg-slate-100 group-hover:text-slate-600"
-                      )}
-                    >
-                      {/* Normal state: Icon, Hover state: Chevron */}
-                      <item.icon
-                        className={cn(
-                          "h-4 w-4 transition-all duration-200",
-                          item.id !== "global" && "group-hover:opacity-0"
-                        )}
-                      />
-                    </div>
+                  {rootFolders.map((folder) => (
+                    <NavItem
+                      key={folder.id}
+                      folder={folder}
+                      activeFolderId={activeFolderId}
+                      onFolderSelect={onFolderSelect}
+                      allFolders={folders}
+                      onDelete={handleDelete}
+                      onRefresh={onRefresh}
+                    />
+                  ))}
+                </SortableContext>
 
-                    {item.id !== "global" && (
-                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200">
-                        {isExpanded ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4" />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <span>{item.label}</span>
-                </button>
+                <DragOverlay
+                  dropAnimation={{
+                    sideEffects: defaultDropAnimationSideEffects({
+                      styles: {
+                        active: {
+                          opacity: "0.5",
+                        },
+                      },
+                    }),
+                  }}
+                >
+                  {activeId ? (
+                    <NavItem
+                      folder={folders.find((f) => f.id === activeId)!}
+                      activeFolderId={activeFolderId}
+                      onFolderSelect={onFolderSelect}
+                      allFolders={folders}
+                      onDelete={handleDelete}
+                      onRefresh={onRefresh}
+                      isOverlay
+                    />
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
 
-                {item.id !== "global" && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg hover:bg-slate-100"
-                    onClick={() =>
-                      setAddingTo(addingTo === item.id ? null : item.id)
-                    }
-                  >
-                    <Plus className="h-4 w-4 text-slate-400" />
-                  </Button>
-                )}
-              </div>
-
-              {(item.id === "global" || isExpanded) && (
-                <div className="ml-4 border-l-2 border-slate-50 pl-2 space-y-1">
-                  {addingTo === item.id && (
-                    <form onSubmit={handleAddScope} className="mb-2 px-2">
-                      <Input
-                        autoFocus
-                        placeholder="New scope name..."
-                        className="h-9 text-xs bg-slate-50 border-none rounded-lg focus:ring-2 focus:ring-indigo-500/20"
-                        value={newScopeName}
-                        onChange={(e) => setNewScopeName(e.target.value)}
-                        onBlur={() => !newScopeName && setAddingTo(null)}
-                      />
-                    </form>
-                  )}
-
-                  {item.id !== "global" && (
-                    <DndContext
-                      key={`dnd-${item.id}`}
-                      sensors={sensors}
-                      collisionDetection={closestCenter}
-                      onDragEnd={(e) => handleDragEnd(e, item.id)}
-                    >
-                      <SortableContext
-                        items={categoryScopes.map((s) => s.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        <div className="space-y-1">
-                          {categoryScopes.map((s) => (
-                            <SortableScopeItem
-                              key={`scope-${s.id}`}
-                              scope={s}
-                              activeScopeId={activeScopeId}
-                              onScopeChange={onScopeChange}
-                              activeType={item.id}
-                              onDelete={handleDeleteScope}
-                            />
-                          ))}
-                        </div>
-                      </SortableContext>
-                    </DndContext>
-                  )}
-
-                  {item.id !== "global" &&
-                    categoryScopes.length === 0 &&
-                    !addingTo && (
-                      <p className="py-2 text-[11px] text-slate-300 font-medium italic pl-4">
-                        No items in this category
-                      </p>
-                    )}
-                </div>
+              {rootFolders.length === 0 && !isAddingRoot && (
+                <p className="px-4 py-8 text-xs text-slate-400 text-center italic">
+                  Create folders to start
+                </p>
               )}
             </div>
-          );
-        })}
-      </nav>
+          </nav>
+        </div>
+      </div>
     </aside>
   );
 }

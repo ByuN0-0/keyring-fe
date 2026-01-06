@@ -4,18 +4,12 @@ import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { encryptData, decryptData } from "@/lib/crypto";
 import { authService } from "@/services/authService";
-import { vaultService } from "@/services/vaultService";
-import { VaultFragment, SessionInfo } from "@/types";
+import { folderService } from "@/services/folderService";
+import { secretService } from "@/services/secretService";
+import { Folder, Secret, SessionInfo } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { Label } from "@/components/ui/Label";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/Card";
+import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AppHeader } from "./AppHeader";
 import { AppSidebar } from "./AppSidebar";
@@ -26,22 +20,23 @@ import {
   Key,
   ShieldCheck,
   ShieldAlert,
-  Search,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-export type ScopeType = "provider" | "project" | "global";
+import { v4 as uuidv4 } from "uuid";
 
 export function DashboardContent() {
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [secrets, setSecrets] = useState<Secret[]>([]);
+  const [editState, setEditState] = useState<
+    { id: string; name: string; value: string; isNew?: boolean }[]
+  >([]);
+  const router = useRouter();
+
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeType, setActiveType] = useState<ScopeType>("provider");
-  const [activeScopeId, setActiveScopeId] = useState<string | null>(null);
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState("");
-  const [newKey, setNewKey] = useState("");
-  const [newValue, setNewValue] = useState("");
-  const [showNewValue, setShowNewValue] = useState(false);
   const [decryptedValues, setDecryptedValues] = useState<
     Record<string, string>
   >({});
@@ -49,20 +44,26 @@ export function DashboardContent() {
     {}
   );
   const [error, setError] = useState("");
-  const [isAdding, setIsAdding] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const router = useRouter();
+  const [isEditing, setIsEditing] = useState(false);
 
   const refreshData = useCallback(async () => {
     try {
-      const data = await authService.getMe();
-      setSession(data);
+      const me = await authService.getMe();
+      setSession(me);
+
+      const { folders: folderData } = await folderService.getFolders();
+      setFolders(folderData);
+
+      const { secrets: secretData } = await secretService.getSecrets(
+        activeFolderId
+      );
+      setSecrets(secretData);
     } catch {
       router.push("/login");
     } finally {
       setIsLoading(false);
     }
-  }, [router]);
+  }, [router, activeFolderId]);
 
   useEffect(() => {
     refreshData();
@@ -91,74 +92,158 @@ export function DashboardContent() {
 
   if (!session) return null;
 
-  const activeScope = session.scopes.find((s) => s.id === activeScopeId);
-  const scopeNames: Record<ScopeType, string> = {
-    provider: "Service Providers",
-    project: "Development Projects",
-    global: "Global Settings",
-  };
+  const currentFolder = folders.find((f) => f.id === activeFolderId);
 
-  const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!passphrase) {
-      setError("마스터 패스프레이즈를 먼저 입력해주세요.");
-      return;
-    }
+  const filteredItems = secrets; // Now fetched specifically for activeFolderId
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("정말 삭제하시겠습니까?")) return;
     try {
-      const { encrypted_blob, salt } = await encryptData(newValue, passphrase);
-      await vaultService.upsertFragment({
-        scope_uuid: activeScopeId || "global",
-        key_name: newKey,
-        encrypted_blob,
-        salt,
-      });
-      setNewKey("");
-      setNewValue("");
-      setIsAdding(false);
+      await secretService.deleteSecret(id);
       refreshData();
-      setError("");
     } catch {
-      setError("저장에 실패했습니다. 패스프레이즈를 확인하세요.");
+      setError("삭제에 실패했습니다.");
     }
   };
 
-  const handleDecrypt = async (fragment: VaultFragment) => {
+  const handleDecrypt = async (secret: Secret) => {
     if (!passphrase) {
       setError("비밀값을 복호화하려면 마스터 패스프레이즈가 필요합니다.");
       return;
     }
+    if (!secret.encrypted_blob || !secret.salt) return;
     try {
       const decrypted = await decryptData(
-        fragment.encrypted_blob,
-        fragment.salt,
+        secret.encrypted_blob,
+        secret.salt,
         passphrase
       );
-      setDecryptedValues((prev) => ({
-        ...prev,
-        [fragment.scope_pk]: decrypted,
-      }));
-      setVisibleSecrets((prev) => ({ ...prev, [fragment.scope_pk]: true }));
+      setDecryptedValues((prev) => ({ ...prev, [secret.id]: decrypted }));
+      setVisibleSecrets((prev) => ({ ...prev, [secret.id]: true }));
       setError("");
     } catch {
       setError("복호화 실패: 패스프레이즈가 틀렸습니다.");
     }
   };
 
-  const filteredFragments = session.fragments.filter((f) => {
-    let matchesScope = false;
-    if (activeType === "global") {
-      matchesScope = (f.scope || "global") === "global";
-    } else if (activeScopeId) {
-      matchesScope = f.scope_pk.startsWith(`${activeScopeId}:`);
+  const handleAddEditRow = () => {
+    setEditState((prev) => [
+      ...prev,
+      { id: uuidv4(), name: "", value: "", isNew: true },
+    ]);
+  };
+
+  const handleStartEdit = async () => {
+    if (!passphrase) {
+      setError("비밀번호 수정을 위해 마스터 패스프레이즈를 먼저 입력해주세요.");
+      return;
     }
 
-    const matchesSearch = f.scope_pk
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
-    return matchesScope && matchesSearch;
-  });
+    setIsLoading(true);
+    try {
+      const newDecryptedValues = { ...decryptedValues };
 
-  const canAdd = activeType === "global" || !!activeScopeId;
+      // Decrypt all items in the current view that aren't already decrypted
+      for (const item of filteredItems) {
+        if (!newDecryptedValues[item.id] && item.encrypted_blob && item.salt) {
+          try {
+            const decrypted = await decryptData(
+              item.encrypted_blob,
+              item.salt,
+              passphrase
+            );
+            newDecryptedValues[item.id] = decrypted;
+          } catch {
+            // If one fails, we might have a wrong passphrase
+            setError(
+              "일부 항목 복호화에 실패했습니다. 패스프레이즈를 확인하세요."
+            );
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+
+      setDecryptedValues(newDecryptedValues);
+      const initialEditState = filteredItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        value: newDecryptedValues[item.id] || "",
+        isNew: false,
+      }));
+      setEditState(initialEditState);
+      setIsEditing(true);
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("편집 모드 전환 중 오류가 발생했습니다.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSaveBatch = async () => {
+    if (!passphrase) {
+      setError("마스터 패스프레이즈를 먼저 입력해주세요.");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      // 1. Determine deletions
+      const currentIds = new Set(editState.map((e) => e.id));
+      const itemsToDelete = filteredItems.filter(
+        (item) => !currentIds.has(item.id)
+      );
+
+      for (const item of itemsToDelete) {
+        await secretService.deleteSecret(item.id);
+      }
+
+      // 2. Add or Update
+      for (const editItem of editState) {
+        if (!editItem.name || !editItem.value) continue;
+
+        const { encrypted_blob, salt } = await encryptData(
+          editItem.value,
+          passphrase
+        );
+
+        if (editItem.isNew) {
+          await secretService.createSecret({
+            id: editItem.id,
+            name: editItem.name,
+            encrypted_blob,
+            salt,
+            folder_id: activeFolderId,
+          });
+        } else {
+          const original = filteredItems.find((i) => i.id === editItem.id);
+          const hasChanged =
+            original?.name !== editItem.name ||
+            decryptedValues[editItem.id] !== editItem.value;
+
+          if (hasChanged) {
+            await secretService.updateSecret(editItem.id, {
+              name: editItem.name,
+              encrypted_blob,
+              salt,
+              folder_id: activeFolderId,
+            });
+          }
+        }
+      }
+
+      setIsEditing(false);
+      setEditState([]);
+      await refreshData();
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("저장에 실패했습니다. 패스프레이즈를 확인하세요.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="flex h-screen flex-col bg-[#F8FAFC] text-slate-900">
@@ -166,51 +251,64 @@ export function DashboardContent() {
 
       <div className="flex flex-1 overflow-hidden">
         <AppSidebar
-          activeType={activeType}
-          activeScopeId={activeScopeId}
-          onScopeChange={(type, id) => {
-            setActiveType(type);
-            setActiveScopeId(id);
-          }}
-          scopes={session.scopes}
+          activeFolderId={activeFolderId}
+          onFolderSelect={setActiveFolderId}
+          folders={folders}
           onRefresh={refreshData}
         />
 
         <main className="flex-1 overflow-y-auto px-10 py-12">
           <div className="mx-auto max-w-5xl space-y-10">
             <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 font-bold">
                 <div className="flex items-center gap-2 text-indigo-600">
                   <Badge
                     variant="secondary"
                     className="bg-indigo-50 text-indigo-700 border-indigo-100 px-2 py-0.5 font-bold uppercase tracking-tighter text-[10px]"
                   >
-                    {activeType}
+                    {currentFolder ? "Folder" : "Root"}
                   </Badge>
                 </div>
                 <h2 className="text-4xl font-black tracking-tight text-slate-900">
-                  {activeScope?.scope_id || scopeNames[activeType]}
+                  {currentFolder?.name || "All Secrets"}
                 </h2>
               </div>
 
-              <div className="flex items-center gap-3">
-                <div className="relative group">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
-
-                  <Input
-                    placeholder="Search secrets..."
-                    className="w-64 pl-10 bg-white border-slate-200 focus:ring-indigo-500 rounded-xl"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                </div>
-
-                {canAdd && (
+              <div className="flex items-center gap-2">
+                {isEditing ? (
+                  <>
+                    <Button
+                      onClick={handleAddEditRow}
+                      variant="ghost"
+                      size="icon"
+                      className="rounded-xl h-10 w-10 text-indigo-600 hover:bg-indigo-50 border border-indigo-100"
+                    >
+                      <Plus className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setIsEditing(false);
+                        setEditState([]);
+                      }}
+                      variant="ghost"
+                      className="h-10 rounded-xl px-4 text-slate-500 hover:bg-slate-100 text-xs font-bold"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSaveBatch}
+                      className="h-10 rounded-xl bg-indigo-600 font-bold text-white hover:bg-indigo-700 px-6 text-xs shadow-md"
+                    >
+                      Save
+                    </Button>
+                  </>
+                ) : (
                   <Button
-                    onClick={() => setIsAdding(!isAdding)}
-                    className="rounded-xl bg-indigo-600 px-6 font-bold text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700"
+                    onClick={handleStartEdit}
+                    variant="outline"
+                    className="h-10 rounded-xl px-6 border-indigo-100 text-indigo-600 font-bold hover:bg-indigo-50 transition-all text-sm"
                   >
-                    <Plus className="mr-2 h-4 w-4" /> Add Item
+                    Modify
                   </Button>
                 )}
               </div>
@@ -272,168 +370,135 @@ export function DashboardContent() {
               </div>
             )}
 
-            {isAdding && (
-              <Card className="border-slate-200 shadow-2xl animate-in fade-in zoom-in-95 duration-300 overflow-hidden rounded-2xl">
-                <CardHeader className="bg-slate-50/50 border-b border-slate-100">
-                  <CardTitle className="text-xl font-black tracking-tight">
-                    Create New Secret
-                  </CardTitle>
-                  <CardDescription>
-                    새로운 비밀번호나 API 키를 안전하게 저장합니다.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="p-8">
-                  <form
-                    onSubmit={handleAdd}
-                    className="grid grid-cols-1 gap-8 md:grid-cols-12"
-                  >
-                    <div className="md:col-span-5 space-y-2.5">
-                      <Label className="text-[11px] font-black uppercase tracking-wider text-slate-400">
-                        Key Name
-                      </Label>
-                      <Input
-                        placeholder="AWS_SECRET_KEY"
-                        className="h-12 rounded-xl bg-slate-50 border-slate-100 focus:bg-white"
-                        value={newKey}
-                        onChange={(e) => setNewKey(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="md:col-span-5 space-y-2.5">
-                      <Label className="text-[11px] font-black uppercase tracking-wider text-slate-400">
-                        Value
-                      </Label>
-                      <div className="relative">
-                        <Input
-                          type={showNewValue ? "text" : "password"}
-                          placeholder="Enter sensitive data"
-                          className="h-12 rounded-xl bg-slate-50 border-slate-100 focus:bg-white pr-12"
-                          value={newValue}
-                          onChange={(e) => setNewValue(e.target.value)}
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowNewValue(!showNewValue)}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600"
-                        >
-                          {showNewValue ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="md:col-span-2 flex items-end">
-                      <Button
-                        type="submit"
-                        className="h-12 w-full rounded-xl bg-indigo-600 font-bold text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100"
-                      >
-                        Encrypt
-                      </Button>
-                    </div>
-                  </form>
-                </CardContent>
-              </Card>
-            )}
-
             <div className="space-y-4">
-              <div className="flex items-center justify-between px-2">
-                <h4 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
-                  Secure Items ({filteredFragments.length})
-                </h4>
-              </div>
-
-              <div className="grid gap-4">
-                {filteredFragments.map((f) => (
-                  <div
-                    key={f.scope_pk}
-                    className="group flex items-center justify-between rounded-3xl bg-white p-6 shadow-sm border border-slate-100 hover:shadow-xl hover:border-indigo-100 transition-all duration-300"
-                  >
-                    <div className="flex items-center gap-6">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
-                        <Key className="h-5 w-5" />
+              <div className="grid gap-2">
+                {isEditing
+                  ? editState.map((editItem, index) => (
+                      <div
+                        key={editItem.id}
+                        className="group flex flex-col md:flex-row items-center gap-4 rounded-2xl bg-white p-4 shadow-sm border border-indigo-100 animate-in fade-in duration-200"
+                      >
+                        <div className="flex-1 w-full space-y-1.5">
+                          <Input
+                            placeholder="Key Name"
+                            className="h-10 rounded-xl bg-slate-50/50 border-slate-100 focus:bg-white transition-all text-sm font-bold"
+                            value={editItem.name}
+                            onChange={(e) => {
+                              const newState = [...editState];
+                              newState[index].name = e.target.value;
+                              setEditState(newState);
+                            }}
+                          />
+                        </div>
+                        <div className="flex-[1.5] w-full">
+                          <Input
+                            placeholder="Value"
+                            className="h-10 rounded-xl bg-slate-50/50 border-slate-100 focus:bg-white transition-all text-[13px]"
+                            value={editItem.value}
+                            onChange={(e) => {
+                              const newState = [...editState];
+                              newState[index].value = e.target.value;
+                              setEditState(newState);
+                            }}
+                          />
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            setEditState((prev) =>
+                              prev.filter((_, i) => i !== index)
+                            );
+                          }}
+                          className="h-10 w-10 text-slate-300 hover:text-red-500 rounded-xl shrink-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                      <div className="space-y-1">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                          Key Identifier
-                        </p>
-                        <h4 className="text-base font-bold text-slate-900 font-mono">
-                          {f.scope_pk.split(":")[1] || f.scope_pk}
-                        </h4>
-                      </div>
-                    </div>
+                    ))
+                  : filteredItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="group flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all duration-200"
+                      >
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl group-hover:scale-105 transition-transform bg-indigo-50 text-indigo-500">
+                            <Key className="h-4.5 w-4.5" />
+                          </div>
 
-                    <div className="flex items-center gap-6">
-                      <div className="text-right">
-                        {decryptedValues[f.scope_pk] ? (
-                          <div className="flex items-center gap-3">
-                            <code className="rounded-xl bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
-                              {visibleSecrets[f.scope_pk]
-                                ? decryptedValues[f.scope_pk]
-                                : "••••••••••••"}
-                            </code>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 rounded-lg"
-                              onClick={() =>
-                                setVisibleSecrets((prev) => ({
-                                  ...prev,
-                                  [f.scope_pk]: !prev[f.scope_pk],
-                                }))
-                              }
-                            >
-                              {visibleSecrets[f.scope_pk] ? (
-                                <EyeOff className="h-4 w-4 text-slate-400" />
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 min-w-0 items-center">
+                            <div className="min-w-0">
+                              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
+                                Secret
+                              </p>
+                              <h4 className="text-sm font-bold text-slate-800 truncate">
+                                {item.name}
+                              </h4>
+                            </div>
+
+                            <div className="flex items-center gap-2 group/value">
+                              {decryptedValues[item.id] ? (
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <code className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-mono font-bold text-emerald-700 ring-1 ring-inset ring-emerald-600/10 truncate">
+                                    {visibleSecrets[item.id]
+                                      ? decryptedValues[item.id]
+                                      : "••••••••••••"}
+                                  </code>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setVisibleSecrets((prev) => ({
+                                        ...prev,
+                                        [item.id]: !prev[item.id],
+                                      }));
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-slate-50 transition-colors"
+                                  >
+                                    {visibleSecrets[item.id] ? (
+                                      <EyeOff className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Eye className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
+                                </div>
                               ) : (
-                                <Eye className="h-4 w-4 text-slate-400" />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDecrypt(item);
+                                  }}
+                                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 underline underline-offset-4 decoration-indigo-200"
+                                >
+                                  Unlock Value
+                                </button>
                               )}
-                            </Button>
+                            </div>
                           </div>
-                        ) : (
-                          <div className="flex gap-1.5 opacity-30 px-4">
-                            {[...Array(6)].map((_, i) => (
-                              <div
-                                key={i}
-                                className="h-1.5 w-1.5 rounded-full bg-slate-400"
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                        </div>
 
-                      <div className="flex items-center gap-2 border-l border-slate-100 pl-6">
-                        {!decryptedValues[f.scope_pk] ? (
-                          <Button
-                            size="sm"
-                            onClick={() => handleDecrypt(f)}
-                            className="rounded-xl bg-white text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white transition-all font-bold px-4"
-                          >
-                            Unlock
-                          </Button>
-                        ) : (
+                        <div className="flex items-center gap-2 ml-4 border-l border-slate-50 pl-4 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 text-slate-300 hover:text-red-500 rounded-xl"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(item.id);
+                            }}
+                            className="h-8 w-8 text-slate-300 hover:text-red-500 rounded-lg"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
+                    ))}
 
-                {filteredFragments.length === 0 && (
+                {!isEditing && filteredItems.length === 0 && (
                   <div className="py-24 flex flex-col items-center justify-center rounded-[40px] border-2 border-dashed border-slate-200 bg-white">
-                    <div className="h-20 w-20 rounded-full bg-slate-50 flex items-center justify-center mb-6">
-                      <Search className="h-8 w-8 text-slate-200" />
+                    <div className="h-20 w-20 rounded-full bg-slate-50 flex items-center justify-center mb-6 text-slate-200">
+                      <Key className="h-8 w-8" />
                     </div>
                     <p className="text-slate-400 font-bold">
-                      No secrets found in this vault.
+                      No secrets in this folder.
                     </p>
                   </div>
                 )}
