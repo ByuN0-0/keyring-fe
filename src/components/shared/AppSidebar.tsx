@@ -23,16 +23,17 @@ import {
   defaultDropAnimationSideEffects,
   DragStartEvent,
   DragEndEvent,
+  DragOverEvent,
 } from "@dnd-kit/core";
 import {
-  arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
+
+type DropPosition = "before" | "after" | "inside" | null;
 
 interface AppSidebarProps {
   activeFolderId: string | null;
@@ -48,6 +49,10 @@ function NavItem({
   allFolders,
   onDelete,
   onRefresh,
+  expandedIds,
+  onToggleExpand,
+  activeId,
+  dropTarget,
   isOverlay = false,
 }: {
   folder: Folder;
@@ -56,28 +61,29 @@ function NavItem({
   allFolders: Folder[];
   onDelete: (id: string) => void;
   onRefresh: () => void;
+  expandedIds: Set<string>;
+  onToggleExpand: (id: string) => void;
+  activeId: string | null;
+  dropTarget: { id: string; position: DropPosition } | null;
   isOverlay?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const isExpanded = expandedIds.has(folder.id);
   const [isAddingSub, setIsAddingSub] = useState(false);
   const [newSubName, setNewSubName] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(folder.name);
 
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: folder.id });
+  const { attributes, listeners, setNodeRef, isDragging } = useSortable({
+    id: folder.id,
+    disabled: isOverlay,
+  });
 
   const style = {
-    transform: CSS.Translate.toString(transform),
-    transition,
     opacity: isDragging ? 0.4 : 1,
   };
+
+  const isDropTarget = dropTarget?.id === folder.id;
+  const dropPosition = isDropTarget ? dropTarget.position : null;
 
   const children = allFolders
     .filter((f) => f.parent_id === folder.id)
@@ -85,12 +91,12 @@ function NavItem({
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setIsExpanded(!isExpanded);
+    onToggleExpand(folder.id);
   };
 
   const handleSelect = () => {
     onFolderSelect(folder.id);
-    setIsExpanded(true);
+    if (!isExpanded) onToggleExpand(folder.id);
   };
 
   const handleAddSub = async (e: React.FormEvent) => {
@@ -112,7 +118,7 @@ function NavItem({
       });
       setNewSubName("");
       setIsAddingSub(false);
-      setIsExpanded(true);
+      if (!isExpanded) onToggleExpand(folder.id);
       onRefresh();
     } catch (err) {
       console.error("Failed to add subfolder", err);
@@ -140,14 +146,20 @@ function NavItem({
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="space-y-0.5">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="space-y-0.5 relative"
+      data-folder-id={folder.id}
+    >
       <div
         className={cn(
-          "group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors cursor-pointer",
+          "group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors cursor-pointer relative",
           activeFolderId === folder.id
             ? "bg-slate-100 text-slate-900 font-semibold"
             : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
-          isOverlay && "bg-white shadow-lg ring-1 ring-slate-200"
+          isOverlay && "bg-white shadow-lg ring-1 ring-slate-200",
+          dropPosition === "inside" && "bg-indigo-50 ring-2 ring-indigo-300"
         )}
         onClick={handleSelect}
         onDoubleClick={(e) => {
@@ -155,6 +167,12 @@ function NavItem({
           setIsEditing(true);
         }}
       >
+        {dropPosition === "before" && (
+          <div className="absolute -top-px left-0 right-0 h-[2px] bg-indigo-500 z-10 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
+        )}
+        {dropPosition === "after" && (
+          <div className="absolute -bottom-px left-0 right-0 h-[2px] bg-indigo-500 z-10 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
+        )}
         <div
           {...attributes}
           {...listeners}
@@ -212,7 +230,7 @@ function NavItem({
             onClick={(e) => {
               e.stopPropagation();
               setIsAddingSub(true);
-              setIsExpanded(true);
+              if (!isExpanded) onToggleExpand(folder.id);
             }}
             className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200 rounded transition-all"
           >
@@ -232,8 +250,13 @@ function NavItem({
         </div>
       </div>
 
-      {(isExpanded || isAddingSub) && !isOverlay && (
-        <div className="ml-3.5 border-l border-slate-100 pl-2 space-y-0.5">
+      {(isExpanded || isAddingSub) && (
+        <div
+          className={cn(
+            "ml-3.5 border-l border-slate-100 pl-2 space-y-0.5",
+            isOverlay && "border-slate-200"
+          )}
+        >
           {isAddingSub && (
             <form onSubmit={handleAddSub} className="px-2 mb-1 text-black">
               <Input
@@ -259,6 +282,11 @@ function NavItem({
                 allFolders={allFolders}
                 onDelete={onDelete}
                 onRefresh={onRefresh}
+                expandedIds={expandedIds}
+                onToggleExpand={onToggleExpand}
+                activeId={activeId}
+                dropTarget={dropTarget}
+                isOverlay={isOverlay}
               />
             ))}
           </SortableContext>
@@ -277,6 +305,20 @@ export function AppSidebar({
   const [isAddingRoot, setIsAddingRoot] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    position: DropPosition;
+  } | null>(null);
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -297,77 +339,179 @@ export function AppSidebar({
     setActiveId(event.active.id as string);
   };
 
+  const handleDragOver = (event: DragOverEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      setDropTarget(null);
+      return;
+    }
+
+    const overElement = document.querySelector(`[data-folder-id="${over.id}"]`);
+    if (!overElement) {
+      setDropTarget(null);
+      return;
+    }
+
+    const rect = overElement.getBoundingClientRect();
+    // Use delta from event to calculate current pointer position
+    const pointerY =
+      (event as unknown as { delta?: { y: number } }).delta?.y ?? 0;
+    const initialY = (event.activatorEvent as MouseEvent | null)?.clientY ?? 0;
+    const currentY = initialY + pointerY;
+
+    const relativeY = currentY - rect.top;
+    const height = rect.height;
+
+    // Determine position: top 20% = before, middle 60% = inside, bottom 20% = after
+    let position: DropPosition;
+    if (relativeY < height * 0.2) {
+      position = "before";
+    } else if (relativeY > height * 0.8) {
+      position = "after";
+    } else {
+      position = "inside";
+    }
+
+    setDropTarget({ id: over.id as string, position });
+  };
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
+    const currentDropTarget = dropTarget;
     setActiveId(null);
+    setDropTarget(null);
 
-    if (!over) return;
+    if (!over || !currentDropTarget) return;
 
     const activeNode = folders.find((f) => f.id === active.id);
-    const overNode = folders.find((f) => f.id === over.id);
+    const overNode = folders.find((f) => f.id === currentDropTarget.id);
 
-    if (!activeNode || !overNode) return;
+    if (!activeNode || !overNode || active.id === over.id) return;
 
-    // Cases:
-    // 1. Moving to a different parent (over is a folder, but not for sorting)
-    //    Actually dnd-kit-sortable is mostly for sorting within same level.
-    //    For nested DND, we need more complex logic.
-    //    Simplified: If same level, reorder. If different level, change parent.
+    try {
+      const position = currentDropTarget.position;
 
-    if (active.id !== over.id) {
-      if (activeNode.parent_id === overNode.parent_id) {
-        // Reorder within same parent
-        const sameLevelFolders = folders
-          .filter((f) => f.parent_id === activeNode.parent_id)
+      if (position === "inside") {
+        // Move as child of overNode
+        // Check for circular reference
+        let currentParent: string | null = overNode.id;
+        while (currentParent) {
+          if (currentParent === activeNode.id) {
+            console.error("Cannot move folder into itself or its descendants");
+            return;
+          }
+          const parent = folders.find((f) => f.id === currentParent);
+          currentParent = parent?.parent_id || null;
+        }
+
+        const targetChildren = folders.filter(
+          (f) => f.parent_id === overNode.id
+        );
+        const maxOrder = Math.max(
+          0,
+          ...targetChildren.map((f) => f.sort_order || 0)
+        );
+
+        await folderService.updateFolder(activeNode.id, {
+          parent_id: overNode.id,
+          sort_order: maxOrder + 1,
+        });
+        onRefresh();
+      } else {
+        // Insert before or after overNode
+        let targetParentId = overNode.parent_id;
+
+        // Special case: dropping "after" the last visible child of an expanded folder
+        // Check if overNode has a parent that is expanded and overNode is the last child
+        if (position === "after" && overNode.parent_id) {
+          const parentFolder = folders.find((f) => f.id === overNode.parent_id);
+          if (parentFolder && expandedIds.has(parentFolder.id)) {
+            const siblingChildren = folders
+              .filter((f) => f.parent_id === parentFolder.id)
+              .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+            const isLastChild =
+              siblingChildren[siblingChildren.length - 1]?.id === overNode.id;
+
+            if (isLastChild) {
+              // If active is already in this parent's children, move to grandparent level
+              if (activeNode.parent_id === parentFolder.id) {
+                // Move to grandparent's level, after the parent
+                targetParentId = parentFolder.parent_id;
+                const grandparentSiblings = folders
+                  .filter((f) => f.parent_id === targetParentId)
+                  .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+                const parentIndex = grandparentSiblings.findIndex(
+                  (f) => f.id === parentFolder.id
+                );
+                const filteredSiblings = grandparentSiblings.filter(
+                  (f) => f.id !== activeNode.id
+                );
+                const insertIndex = parentIndex + 1;
+
+                const newSiblings = [
+                  ...filteredSiblings.slice(0, insertIndex),
+                  activeNode,
+                  ...filteredSiblings.slice(insertIndex),
+                ];
+
+                await Promise.all(
+                  newSiblings.map((f, index) =>
+                    folderService.updateFolder(f.id, {
+                      parent_id: targetParentId,
+                      sort_order: index,
+                    })
+                  )
+                );
+                onRefresh();
+                return;
+              }
+              // Otherwise, continue with normal logic but insert at parent's level after the parent
+            }
+          }
+        }
+
+        const siblings = folders
+          .filter((f) => f.parent_id === targetParentId)
           .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-        const oldIndex = sameLevelFolders.findIndex((f) => f.id === active.id);
-        const newIndex = sameLevelFolders.findIndex((f) => f.id === over.id);
+        const overIndex = siblings.findIndex((f) => f.id === overNode.id);
+        const insertIndex = position === "before" ? overIndex : overIndex + 1;
 
-        const newOrder = arrayMove(sameLevelFolders, oldIndex, newIndex);
+        // Remove active from siblings if it's in the same parent
+        const filteredSiblings = siblings.filter((f) => f.id !== activeNode.id);
 
-        // Update all affected sort_orders
-        try {
-          await Promise.all(
-            newOrder.map((f, index) =>
-              folderService.updateFolder(f.id, { sort_order: index })
-            )
-          );
-          onRefresh();
-        } catch (err) {
-          console.error("Failed to reorder folders", err);
-        }
-      } else {
-        // Change parent
-        try {
-          // Check for circular reference
-          let currentParent = overNode.parent_id;
-          while (currentParent) {
-            if (currentParent === activeNode.id) {
-              console.error("Circular folder reference detected");
-              return;
-            }
-            const parent = folders.find((f) => f.id === currentParent);
-            currentParent = parent?.parent_id || null;
+        // Adjust insert index if active was before overNode in same parent
+        let adjustedInsertIndex = insertIndex;
+        if (activeNode.parent_id === targetParentId) {
+          const activeIndex = siblings.findIndex((f) => f.id === activeNode.id);
+          if (activeIndex < overIndex) {
+            adjustedInsertIndex = Math.max(0, insertIndex - 1);
           }
-
-          const targetChildren = folders.filter(
-            (f) => f.parent_id === overNode.id
-          );
-          const maxOrder = Math.max(
-            0,
-            ...targetChildren.map((f) => f.sort_order || 0)
-          );
-
-          await folderService.updateFolder(activeNode.id, {
-            parent_id: overNode.id,
-            sort_order: maxOrder + 1,
-          });
-          onRefresh();
-        } catch (err) {
-          console.error("Failed to move folder", err);
         }
+
+        // Insert at the correct position
+        const newSiblings = [
+          ...filteredSiblings.slice(0, adjustedInsertIndex),
+          activeNode,
+          ...filteredSiblings.slice(adjustedInsertIndex),
+        ];
+
+        // Update all siblings with new sort orders
+        await Promise.all(
+          newSiblings.map((f, index) =>
+            folderService.updateFolder(f.id, {
+              parent_id: targetParentId,
+              sort_order: index,
+            })
+          )
+        );
+        onRefresh();
       }
+    } catch (err) {
+      console.error("Failed to move folder", err);
     }
   };
 
@@ -452,6 +596,7 @@ export function AppSidebar({
                 sensors={sensors}
                 collisionDetection={closestCenter}
                 onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
                 onDragEnd={handleDragEnd}
               >
                 <SortableContext
@@ -467,6 +612,10 @@ export function AppSidebar({
                       allFolders={folders}
                       onDelete={handleDelete}
                       onRefresh={onRefresh}
+                      expandedIds={expandedIds}
+                      onToggleExpand={toggleExpand}
+                      activeId={activeId}
+                      dropTarget={dropTarget}
                     />
                   ))}
                 </SortableContext>
@@ -490,6 +639,10 @@ export function AppSidebar({
                       allFolders={folders}
                       onDelete={handleDelete}
                       onRefresh={onRefresh}
+                      expandedIds={expandedIds}
+                      onToggleExpand={toggleExpand}
+                      activeId={activeId}
+                      dropTarget={null}
                       isOverlay
                     />
                   ) : null}
