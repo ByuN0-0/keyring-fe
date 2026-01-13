@@ -46,28 +46,47 @@ export function DashboardContent() {
   const [error, setError] = useState("");
   const [isEditing, setIsEditing] = useState(false);
 
-  const refreshData = useCallback(async () => {
+  // Initial load: User session & Folders
+  const loadInitialData = useCallback(async () => {
     try {
       const me = await authService.getMe();
       setSession(me);
 
       const { folders: folderData } = await folderService.getFolders();
       setFolders(folderData);
-
-      const { secrets: secretData } = await secretService.getSecrets(
-        activeFolderId
-      );
-      setSecrets(secretData);
     } catch {
       router.push("/login");
     } finally {
       setIsLoading(false);
     }
-  }, [router, activeFolderId]);
+  }, [router]);
+
+  // Load secrets whenever the active folder changes
+  const loadSecrets = useCallback(async () => {
+    try {
+      const { secrets: secretData } = await secretService.getSecrets(
+        activeFolderId
+      );
+      setSecrets(secretData);
+    } catch (e) {
+      console.error("Failed to load secrets", e);
+    }
+  }, [activeFolderId]);
+
+  // Combined refresh for manual updates
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadInitialData(), loadSecrets()]);
+  }, [loadInitialData, loadSecrets]);
 
   useEffect(() => {
-    refreshData();
-  }, [refreshData]);
+    loadInitialData();
+  }, [loadInitialData]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      loadSecrets();
+    }
+  }, [loadSecrets, isLoading]);
 
   if (isLoading) {
     return (
@@ -100,7 +119,7 @@ export function DashboardContent() {
     if (!confirm("정말 삭제하시겠습니까?")) return;
     try {
       await secretService.deleteSecret(id);
-      refreshData();
+      loadSecrets();
     } catch {
       setError("삭제에 실패했습니다.");
     }
@@ -235,7 +254,7 @@ export function DashboardContent() {
 
       setIsEditing(false);
       setEditState([]);
-      await refreshData();
+      await loadSecrets();
       setError("");
     } catch (err) {
       console.error(err);
@@ -254,7 +273,7 @@ export function DashboardContent() {
           activeFolderId={activeFolderId}
           onFolderSelect={setActiveFolderId}
           folders={folders}
-          onRefresh={refreshData}
+          onRefresh={refreshAll}
         />
 
         <main className="flex-1 overflow-y-auto px-10 py-12">
