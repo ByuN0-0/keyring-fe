@@ -3,13 +3,27 @@ import { Folder } from "@/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Folder as FolderIcon,
+  FolderOpen,
   ChevronRight,
   ChevronDown,
   Plus,
   Trash2,
-  LayoutDashboard,
+  Home,
   GripVertical,
 } from "lucide-react";
 import {
@@ -31,7 +45,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 type DropPosition = "before" | "after" | "inside" | null;
 
@@ -96,12 +110,12 @@ function NavItem({
 
   const handleSelect = () => {
     onFolderSelect(folder.id);
-    if (!isExpanded) onToggleExpand(folder.id);
+    if (!isExpanded && children.length > 0) onToggleExpand(folder.id);
   };
 
   const handleAddSub = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSubName) return;
+    if (!newSubName.trim()) return;
     try {
       const parentChildren = allFolders.filter(
         (f) => f.parent_id === folder.id
@@ -110,9 +124,8 @@ function NavItem({
         0,
         ...parentChildren.map((f) => f.sort_order || 0)
       );
-
       await folderService.createFolder({
-        name: newSubName,
+        name: newSubName.trim(),
         parent_id: folder.id,
         sort_order: maxSortOrder + 1,
       });
@@ -127,15 +140,14 @@ function NavItem({
 
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editName || editName === folder.name) {
+    const trimmed = editName.trim();
+    if (!trimmed || trimmed === folder.name) {
       setIsEditing(false);
       setEditName(folder.name);
       return;
     }
     try {
-      await folderService.updateFolder(folder.id, {
-        name: editName,
-      });
+      await folderService.updateFolder(folder.id, { name: trimmed });
       setIsEditing(false);
       onRefresh();
     } catch (err) {
@@ -145,6 +157,18 @@ function NavItem({
     }
   };
 
+  const startEditing = () => {
+    setEditName(folder.name);
+    setIsEditing(true);
+  };
+
+  const startAddSub = () => {
+    setIsAddingSub(true);
+    if (!isExpanded) onToggleExpand(folder.id);
+  };
+
+  const isActive = activeFolderId === folder.id;
+
   return (
     <div
       ref={setNodeRef}
@@ -152,117 +176,162 @@ function NavItem({
       className="space-y-0.5 relative"
       data-folder-id={folder.id}
     >
-      <div
-        className={cn(
-          "group flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors cursor-pointer relative",
-          activeFolderId === folder.id
-            ? "bg-slate-100 text-slate-900 font-semibold"
-            : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
-          isOverlay && "bg-white shadow-lg ring-1 ring-slate-200",
-          dropPosition === "inside" && "bg-indigo-50 ring-2 ring-indigo-300"
-        )}
-        onClick={handleSelect}
-        onDoubleClick={(e) => {
-          e.stopPropagation();
-          setIsEditing(true);
-        }}
-      >
-        {dropPosition === "before" && (
-          <div className="absolute -top-px left-0 right-0 h-[2px] bg-indigo-500 z-10 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
-        )}
-        {dropPosition === "after" && (
-          <div className="absolute -bottom-px left-0 right-0 h-[2px] bg-indigo-500 z-10 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
-        )}
-        <div
-          {...attributes}
-          {...listeners}
-          className="p-1 -ml-1 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-opacity"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <GripVertical className="h-3 w-3" />
-        </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className={cn(
+              "group relative flex items-center gap-1 rounded-md px-2 py-1.25 text-[13px] transition-colors cursor-pointer",
+              isActive
+                ? "bg-slate-100 text-slate-900 font-medium"
+                : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+              isOverlay &&
+                "bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.1)] ring-1 ring-slate-200/80",
+              dropPosition === "inside" &&
+                "bg-indigo-50/60 ring-1 ring-indigo-200"
+            )}
+            onClick={handleSelect}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              startEditing();
+            }}
+          >
+            {/* DND drop indicators */}
+            {dropPosition === "before" && (
+              <div className="drop-indicator -top-px animate-in fade-in duration-100" />
+            )}
+            {dropPosition === "after" && (
+              <div className="drop-indicator -bottom-px animate-in fade-in duration-100" />
+            )}
 
-        <div className="flex items-center justify-center w-4 h-4">
-          {children.length > 0 && (
-            <button
-              onClick={handleToggle}
-              className="p-0.5 hover:bg-slate-200 rounded transition-colors"
+            {/* Drag handle */}
+            <div
+              {...attributes}
+              {...listeners}
+              className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-opacity shrink-0"
+              onClick={(e) => e.stopPropagation()}
             >
-              {isExpanded ? (
-                <ChevronDown className="h-3 w-3" />
+              <GripVertical className="h-3 w-3" />
+            </div>
+
+            {/* Expand chevron */}
+            <div className="flex items-center justify-center w-3.5 h-3.5 shrink-0">
+              {children.length > 0 ? (
+                <button
+                  onClick={handleToggle}
+                  className="p-0.5 hover:bg-slate-200/80 rounded transition-colors"
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="h-3 w-3" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3" />
+                  )}
+                </button>
               ) : (
-                <ChevronRight className="h-3 w-3" />
+                <span className="w-3 h-3" />
               )}
-            </button>
-          )}
-          {children.length === 0 && (
-            <ChevronRight className="h-3 w-3 opacity-0" />
-          )}
-        </div>
+            </div>
 
-        <FolderIcon
-          className={cn(
-            "h-3.5 w-3.5 shrink-0",
-            activeFolderId === folder.id ? "text-indigo-500" : "text-slate-400"
-          )}
-        />
+            {/* Folder icon */}
+            {isExpanded ? (
+              <FolderOpen
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0",
+                  isActive ? "text-indigo-500" : "text-slate-400"
+                )}
+              />
+            ) : (
+              <FolderIcon
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0",
+                  isActive ? "text-indigo-500" : "text-slate-400"
+                )}
+              />
+            )}
 
-        {isEditing ? (
-          <form
-            onSubmit={handleRename}
-            className="flex-1 min-w-0"
-            onClick={(e) => e.stopPropagation()}
+            {/* Name / Edit input */}
+            {isEditing ? (
+              <form
+                onSubmit={handleRename}
+                className="flex-1 min-w-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Input
+                  autoFocus
+                  className="h-5 py-0 px-1 text-[13px] rounded border-slate-200 focus:ring-1"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={() => {
+                    setIsEditing(false);
+                    setEditName(folder.name);
+                  }}
+                />
+              </form>
+            ) : (
+              <span className="flex-1 truncate text-[13px]">{folder.name}</span>
+            )}
+
+            {/* Hover action buttons */}
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startAddSub();
+                }}
+                className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200/60 rounded transition-all"
+                title="Add subfolder"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm("이 폴더를 삭제하시겠습니까?"))
+                    onDelete(folder.id);
+                }}
+                className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all"
+                title="Delete folder"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        </ContextMenuTrigger>
+
+        {/* Right-click context menu */}
+        <ContextMenuContent className="w-44">
+          <ContextMenuItem
+            className="cursor-pointer"
+            onSelect={startEditing}
           >
-            <Input
-              autoFocus
-              className="h-6 py-0 px-1 text-[13px] rounded border-slate-200 focus:ring-1"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              onBlur={() => setIsEditing(false)}
-            />
-          </form>
-        ) : (
-          <span className="flex-1 truncate text-[13px]">{folder.name}</span>
-        )}
-
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsAddingSub(true);
-              if (!isExpanded) onToggleExpand(folder.id);
+            Rename
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="cursor-pointer"
+            onSelect={startAddSub}
+          >
+            New Subfolder
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer"
+            onSelect={() => {
+              if (confirm("이 폴더를 삭제하시겠습니까?")) onDelete(folder.id);
             }}
-            className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200 rounded transition-all"
           >
-            <Plus className="h-3 w-3" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              if (confirm("정말 삭제하시겠습니까?")) {
-                onDelete(folder.id);
-              }
-            }}
-            className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
+            Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
 
+      {/* Children */}
       {(isExpanded || isAddingSub) && (
-        <div
-          className={cn(
-            "ml-3.5 border-l border-slate-100 pl-2 space-y-0.5",
-            isOverlay && "border-slate-200"
-          )}
-        >
+        <div className="ml-4 border-l border-slate-100 pl-1.5 space-y-0.5">
           {isAddingSub && (
-            <form onSubmit={handleAddSub} className="px-2 mb-1 text-black">
+            <form onSubmit={handleAddSub} className="px-1 mb-1">
               <Input
                 autoFocus
-                placeholder="New subfolder..."
-                className="h-7 text-xs rounded-md border-slate-200 bg-white"
+                placeholder="Subfolder name..."
+                className="h-6 text-[12px] rounded border-slate-200 bg-white"
                 value={newSubName}
                 onChange={(e) => setNewSubName(e.target.value)}
                 onBlur={() => !newSubName && setIsAddingSub(false)}
@@ -311,6 +380,16 @@ export function AppSidebar({
     position: DropPosition;
   } | null>(null);
 
+  // Auto-expand on hover during drag
+  const hoverExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [hoverExpandTarget, setHoverExpandTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hoverExpandTimerRef.current) clearTimeout(hoverExpandTimerRef.current);
+    };
+  }, []);
+
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -322,9 +401,7 @@ export function AppSidebar({
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
+      activationConstraint: { distance: 8 },
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
@@ -347,30 +424,51 @@ export function AppSidebar({
       return;
     }
 
-    const overElement = document.querySelector(`[data-folder-id="${over.id}"]`);
-    if (!overElement) {
+    // Use dnd-kit's built-in rect instead of DOM querySelector
+    const overRect = over.rect;
+    const activeTranslated = active.rect.current.translated;
+
+    if (!overRect || !activeTranslated) {
       setDropTarget(null);
       return;
     }
 
-    const rect = overElement.getBoundingClientRect();
-    // Use delta from event to calculate current pointer position
-    const pointerY =
-      (event as unknown as { delta?: { y: number } }).delta?.y ?? 0;
-    const initialY = (event.activatorEvent as MouseEvent | null)?.clientY ?? 0;
-    const currentY = initialY + pointerY;
+    // Use center of dragged item as position proxy
+    const dragCenterY = activeTranslated.top + activeTranslated.height / 2;
+    const relativeY = dragCenterY - overRect.top;
+    const height = overRect.height;
 
-    const relativeY = currentY - rect.top;
-    const height = rect.height;
-
-    // Determine position: top 20% = before, middle 60% = inside, bottom 20% = after
+    // Tightened zones: 25% before / 50% inside / 25% after
     let position: DropPosition;
-    if (relativeY < height * 0.2) {
+    if (relativeY < height * 0.25) {
       position = "before";
-    } else if (relativeY > height * 0.8) {
+    } else if (relativeY > height * 0.75) {
       position = "after";
     } else {
       position = "inside";
+    }
+
+    // Auto-expand collapsed folders after 600ms hover
+    if (position === "inside") {
+      if (hoverExpandTarget !== over.id) {
+        if (hoverExpandTimerRef.current) clearTimeout(hoverExpandTimerRef.current);
+        setHoverExpandTarget(over.id as string);
+        hoverExpandTimerRef.current = setTimeout(() => {
+          const targetId = over.id as string;
+          const hasChildren = folders.some((f) => f.parent_id === targetId);
+          if (hasChildren) {
+            setExpandedIds((prev) => new Set([...prev, targetId]));
+          }
+          hoverExpandTimerRef.current = null;
+          setHoverExpandTarget(null);
+        }, 600);
+      }
+    } else {
+      if (hoverExpandTimerRef.current) {
+        clearTimeout(hoverExpandTimerRef.current);
+        hoverExpandTimerRef.current = null;
+      }
+      setHoverExpandTarget(null);
     }
 
     setDropTarget({ id: over.id as string, position });
@@ -379,6 +477,11 @@ export function AppSidebar({
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     const currentDropTarget = dropTarget;
+
+    // Cleanup
+    if (hoverExpandTimerRef.current) clearTimeout(hoverExpandTimerRef.current);
+    hoverExpandTimerRef.current = null;
+    setHoverExpandTarget(null);
     setActiveId(null);
     setDropTarget(null);
 
@@ -393,7 +496,6 @@ export function AppSidebar({
       const position = currentDropTarget.position;
 
       if (position === "inside") {
-        // Move as child of overNode
         // Check for circular reference
         let currentParent: string | null = overNode.id;
         while (currentParent) {
@@ -417,13 +519,13 @@ export function AppSidebar({
           parent_id: overNode.id,
           sort_order: maxOrder + 1,
         });
+        // Auto-expand the target folder to show the moved item
+        setExpandedIds((prev) => new Set([...prev, overNode.id]));
         onRefresh();
       } else {
         // Insert before or after overNode
         let targetParentId = overNode.parent_id;
 
-        // Special case: dropping "after" the last visible child of an expanded folder
-        // Check if overNode has a parent that is expanded and overNode is the last child
         if (position === "after" && overNode.parent_id) {
           const parentFolder = folders.find((f) => f.id === overNode.parent_id);
           if (parentFolder && expandedIds.has(parentFolder.id)) {
@@ -435,9 +537,7 @@ export function AppSidebar({
               siblingChildren[siblingChildren.length - 1]?.id === overNode.id;
 
             if (isLastChild) {
-              // If active is already in this parent's children, move to grandparent level
               if (activeNode.parent_id === parentFolder.id) {
-                // Move to grandparent's level, after the parent
                 targetParentId = parentFolder.parent_id;
                 const grandparentSiblings = folders
                   .filter((f) => f.parent_id === targetParentId)
@@ -468,7 +568,6 @@ export function AppSidebar({
                 onRefresh();
                 return;
               }
-              // Otherwise, continue with normal logic but insert at parent's level after the parent
             }
           }
         }
@@ -480,10 +579,8 @@ export function AppSidebar({
         const overIndex = siblings.findIndex((f) => f.id === overNode.id);
         const insertIndex = position === "before" ? overIndex : overIndex + 1;
 
-        // Remove active from siblings if it's in the same parent
         const filteredSiblings = siblings.filter((f) => f.id !== activeNode.id);
 
-        // Adjust insert index if active was before overNode in same parent
         let adjustedInsertIndex = insertIndex;
         if (activeNode.parent_id === targetParentId) {
           const activeIndex = siblings.findIndex((f) => f.id === activeNode.id);
@@ -492,14 +589,12 @@ export function AppSidebar({
           }
         }
 
-        // Insert at the correct position
         const newSiblings = [
           ...filteredSiblings.slice(0, adjustedInsertIndex),
           activeNode,
           ...filteredSiblings.slice(adjustedInsertIndex),
         ];
 
-        // Update all siblings with new sort orders
         await Promise.all(
           newSiblings.map((f, index) =>
             folderService.updateFolder(f.id, {
@@ -517,14 +612,14 @@ export function AppSidebar({
 
   const handleAddRootFolder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFolderName) return;
+    if (!newFolderName.trim()) return;
     try {
       const maxSortOrder = Math.max(
         0,
         ...rootFolders.map((f) => f.sort_order || 0)
       );
       await folderService.createFolder({
-        name: newFolderName,
+        name: newFolderName.trim(),
         parent_id: null,
         sort_order: maxSortOrder + 1,
       });
@@ -546,118 +641,125 @@ export function AppSidebar({
     }
   };
 
-  return (
-    <aside className="w-72 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none">
-      <div className="p-6 space-y-6 flex-1 overflow-y-auto">
-        <div className="space-y-4">
-          <div className="flex items-center justify-between px-2">
-            <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">
-              Vault Workspace
-            </h3>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 rounded-lg hover:bg-slate-100"
-              onClick={() => setIsAddingRoot(!isAddingRoot)}
-            >
-              <Plus className="h-4 w-4 text-slate-400" />
-            </Button>
-          </div>
+  const activeFolder = folders.find((f) => f.id === activeId);
 
-          <nav className="space-y-1">
+  return (
+    <aside className="w-60 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none shrink-0">
+      <ScrollArea className="flex-1">
+        <div className="p-3 space-y-4">
+          {/* All Secrets / Root */}
+          <div>
             <div
               className={cn(
-                "flex items-center gap-3 rounded-xl px-4 py-2 text-sm font-bold transition-all cursor-pointer",
+                "flex items-center gap-2 rounded-md px-2 py-1.25 text-[13px] font-medium transition-colors cursor-pointer",
                 activeFolderId === null
-                  ? "text-indigo-600 bg-indigo-50 shadow-sm"
-                  : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               )}
               onClick={() => onFolderSelect(null)}
             >
-              <LayoutDashboard className="h-4 w-4" />
-              <span>Vault Root</span>
+              <Home className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span>All Secrets</span>
+            </div>
+          </div>
+
+          {/* Folders section */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between px-2 pb-0.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400/80">
+                Folders
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                    onClick={() => setIsAddingRoot(!isAddingRoot)}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>New folder</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
 
-            <div className="pt-4 space-y-1">
-              {isAddingRoot && (
-                <form onSubmit={handleAddRootFolder} className="px-2 mb-2">
-                  <Input
-                    autoFocus
-                    placeholder="Folder name..."
-                    className="h-8 text-xs rounded-lg border-slate-200"
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    onBlur={() => !newFolderName && setIsAddingRoot(false)}
-                  />
-                </form>
-              )}
+            {isAddingRoot && (
+              <form onSubmit={handleAddRootFolder} className="px-1 mb-1">
+                <Input
+                  autoFocus
+                  placeholder="Folder name..."
+                  className="h-7 text-[12px] rounded-md border-slate-200"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onBlur={() => !newFolderName && setIsAddingRoot(false)}
+                />
+              </form>
+            )}
 
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragEnd={handleDragEnd}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={rootFolders.map((f) => f.id)}
+                strategy={verticalListSortingStrategy}
               >
-                <SortableContext
-                  items={rootFolders.map((f) => f.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {rootFolders.map((folder) => (
-                    <NavItem
-                      key={folder.id}
-                      folder={folder}
-                      activeFolderId={activeFolderId}
-                      onFolderSelect={onFolderSelect}
-                      allFolders={folders}
-                      onDelete={handleDelete}
-                      onRefresh={onRefresh}
-                      expandedIds={expandedIds}
-                      onToggleExpand={toggleExpand}
-                      activeId={activeId}
-                      dropTarget={dropTarget}
-                    />
-                  ))}
-                </SortableContext>
+                {rootFolders.map((folder) => (
+                  <NavItem
+                    key={folder.id}
+                    folder={folder}
+                    activeFolderId={activeFolderId}
+                    onFolderSelect={onFolderSelect}
+                    allFolders={folders}
+                    onDelete={handleDelete}
+                    onRefresh={onRefresh}
+                    expandedIds={expandedIds}
+                    onToggleExpand={toggleExpand}
+                    activeId={activeId}
+                    dropTarget={dropTarget}
+                  />
+                ))}
+              </SortableContext>
 
-                <DragOverlay
-                  dropAnimation={{
-                    sideEffects: defaultDropAnimationSideEffects({
-                      styles: {
-                        active: {
-                          opacity: "0.5",
-                        },
-                      },
-                    }),
-                  }}
-                >
-                  {activeId ? (
-                    <NavItem
-                      folder={folders.find((f) => f.id === activeId)!}
-                      activeFolderId={activeFolderId}
-                      onFolderSelect={onFolderSelect}
-                      allFolders={folders}
-                      onDelete={handleDelete}
-                      onRefresh={onRefresh}
-                      expandedIds={expandedIds}
-                      onToggleExpand={toggleExpand}
-                      activeId={activeId}
-                      dropTarget={null}
-                      isOverlay
-                    />
-                  ) : null}
-                </DragOverlay>
-              </DndContext>
+              <DragOverlay
+                dropAnimation={{
+                  sideEffects: defaultDropAnimationSideEffects({
+                    styles: { active: { opacity: "0.4" } },
+                  }),
+                }}
+              >
+                {activeFolder ? (
+                  <NavItem
+                    folder={activeFolder}
+                    activeFolderId={activeFolderId}
+                    onFolderSelect={onFolderSelect}
+                    allFolders={folders}
+                    onDelete={handleDelete}
+                    onRefresh={onRefresh}
+                    expandedIds={expandedIds}
+                    onToggleExpand={toggleExpand}
+                    activeId={activeId}
+                    dropTarget={null}
+                    isOverlay
+                  />
+                ) : null}
+              </DragOverlay>
+            </DndContext>
 
-              {rootFolders.length === 0 && !isAddingRoot && (
-                <p className="px-4 py-8 text-xs text-slate-400 text-center italic">
-                  Create folders to start
-                </p>
-              )}
-            </div>
-          </nav>
+            {rootFolders.length === 0 && !isAddingRoot && (
+              <p className="px-2 py-6 text-[12px] text-slate-400 text-center">
+                No folders yet
+              </p>
+            )}
+          </div>
         </div>
-      </div>
+      </ScrollArea>
     </aside>
   );
 }
