@@ -257,6 +257,7 @@ export function DashboardContent() {
           activeFolderId={activeFolderId}
           onFolderSelect={setActiveFolderId}
           folders={folders}
+          onFoldersChange={setFolders}
           onRefresh={refreshAll}
         />
 
