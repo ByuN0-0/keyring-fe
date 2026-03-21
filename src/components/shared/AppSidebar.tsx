@@ -28,24 +28,21 @@ import {
 } from "lucide-react";
 import {
   DndContext,
+  pointerWithin,
   closestCenter,
-  KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
+  useDraggable,
+  useDroppable,
   DragOverlay,
   defaultDropAnimationSideEffects,
   DragStartEvent,
   DragEndEvent,
   DragOverEvent,
+  CollisionDetection,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 type DropPosition = "before" | "after" | "inside" | null;
 
@@ -57,32 +54,14 @@ interface AppSidebarProps {
   onRefresh: () => void;
 }
 
-// Compute all visible folder IDs in tree order (respecting expand state)
-function getVisibleFolderIds(
-  folders: Folder[],
-  expandedIds: Set<string>
-): string[] {
-  const ids: string[] = [];
-  function walk(parentId: string | null) {
-    folders
-      .filter((f) => f.parent_id === parentId)
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
-      .forEach((f) => {
-        ids.push(f.id);
-        if (expandedIds.has(f.id)) walk(f.id);
-      });
-  }
-  walk(null);
-  return ids;
-}
+// ─── Helpers ──────────────────────────────────────────────────
 
-// Check if `descendantId` is a descendant of `ancestorId`
 function isDescendant(
   folders: Folder[],
   ancestorId: string,
-  descendantId: string
+  targetId: string
 ): boolean {
-  let current: string | null = descendantId;
+  let current: string | null = targetId;
   while (current) {
     if (current === ancestorId) return true;
     const folder = folders.find((f) => f.id === current);
@@ -91,18 +70,19 @@ function isDescendant(
   return false;
 }
 
-// Compute optimistic folder state after a DND operation
 function computeOptimisticFolders(
   folders: Folder[],
   activeId: string,
   overId: string,
   position: DropPosition
-): { newFolders: Folder[]; updates: { id: string; parent_id: string | null; sort_order: number }[] } {
+): {
+  newFolders: Folder[];
+  updates: { id: string; parent_id: string | null; sort_order: number }[];
+} {
   const activeNode = folders.find((f) => f.id === activeId)!;
   const overNode = folders.find((f) => f.id === overId)!;
 
   if (position === "inside") {
-    // Move active as last child of overNode
     const targetChildren = folders
       .filter((f) => f.parent_id === overNode.id && f.id !== activeNode.id)
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -111,7 +91,6 @@ function computeOptimisticFolders(
     const updates = [
       { id: activeNode.id, parent_id: overNode.id, sort_order: newSortOrder },
     ];
-
     const newFolders = folders.map((f) =>
       f.id === activeNode.id
         ? { ...f, parent_id: overNode.id, sort_order: newSortOrder }
@@ -120,10 +99,8 @@ function computeOptimisticFolders(
     return { newFolders, updates };
   }
 
-  // before / after: insert into overNode's parent
+  // before / after
   const targetParentId = overNode.parent_id;
-
-  // Get siblings (excluding the active node)
   const siblings = folders
     .filter((f) => f.parent_id === targetParentId && f.id !== activeNode.id)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -146,12 +123,22 @@ function computeOptimisticFolders(
   const updateMap = new Map(updates.map((u) => [u.id, u]));
   const newFolders = folders.map((f) => {
     const update = updateMap.get(f.id);
-    if (update) return { ...f, parent_id: update.parent_id, sort_order: update.sort_order };
+    if (update)
+      return { ...f, parent_id: update.parent_id, sort_order: update.sort_order };
     return f;
   });
 
   return { newFolders, updates };
 }
+
+// Custom collision: pointerWithin first, closestCenter fallback
+const treeCollision: CollisionDetection = (args) => {
+  const pointer = pointerWithin(args);
+  if (pointer.length > 0) return pointer;
+  return closestCenter(args);
+};
+
+// ─── NavItem ──────────────────────────────────────────────────
 
 function NavItem({
   folder,
@@ -182,14 +169,30 @@ function NavItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(folder.name);
 
-  const { attributes, listeners, setNodeRef, isDragging } = useSortable({
+  // useDraggable — no item shifting
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDragRef,
+    isDragging,
+  } = useDraggable({
     id: folder.id,
     disabled: isOverlay,
   });
 
-  const style = {
-    opacity: isDragging ? 0.3 : 1,
-  };
+  // useDroppable — register as drop target
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: folder.id,
+  });
+
+  // Combine refs
+  const setNodeRef = useCallback(
+    (el: HTMLElement | null) => {
+      setDragRef(el);
+      setDropRef(el);
+    },
+    [setDragRef, setDropRef]
+  );
 
   const isDropTarget = dropTarget?.id === folder.id;
   const dropPosition = isDropTarget ? dropTarget.position : null;
@@ -264,19 +267,19 @@ function NavItem({
 
   const isActive = activeFolderId === folder.id;
 
-  // Depth calculation for indentation
+  // Depth for indentation
   let depth = 0;
-  let parentId = folder.parent_id;
-  while (parentId) {
+  let pid = folder.parent_id;
+  while (pid) {
     depth++;
-    const parent = allFolders.find((f) => f.id === parentId);
-    parentId = parent?.parent_id || null;
+    const p = allFolders.find((f) => f.id === pid);
+    pid = p?.parent_id || null;
   }
 
   return (
     <div
       ref={setNodeRef}
-      style={style}
+      style={{ opacity: isDragging ? 0.3 : 1 }}
       data-folder-id={folder.id}
     >
       <ContextMenu>
@@ -288,7 +291,7 @@ function NavItem({
                 ? "bg-slate-100 text-slate-900 font-medium"
                 : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
               isOverlay &&
-                "bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.1)] ring-1 ring-slate-200/80 rounded-md",
+                "bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.12)] ring-1 ring-slate-200/80 rounded-md",
               dropPosition === "inside" &&
                 "bg-indigo-50/70 ring-1 ring-indigo-300"
             )}
@@ -299,12 +302,11 @@ function NavItem({
               startEditing();
             }}
           >
-            {/* DND drop indicators */}
             {dropPosition === "before" && (
-              <div className="drop-indicator -top-px animate-in fade-in duration-100" />
+              <div className="drop-indicator -top-px" />
             )}
             {dropPosition === "after" && (
-              <div className="drop-indicator -bottom-px animate-in fade-in duration-100" />
+              <div className="drop-indicator -bottom-px" />
             )}
 
             {/* Drag handle */}
@@ -317,7 +319,7 @@ function NavItem({
               <GripVertical className="h-3 w-3" />
             </div>
 
-            {/* Expand chevron */}
+            {/* Chevron */}
             <div className="flex items-center justify-center w-3.5 h-3.5 shrink-0">
               {children.length > 0 ? (
                 <button
@@ -335,7 +337,7 @@ function NavItem({
               )}
             </div>
 
-            {/* Folder icon */}
+            {/* Icon */}
             {isExpanded && children.length > 0 ? (
               <FolderOpen
                 className={cn(
@@ -352,7 +354,7 @@ function NavItem({
               />
             )}
 
-            {/* Name / Edit input */}
+            {/* Name */}
             {isEditing ? (
               <form
                 onSubmit={handleRename}
@@ -374,7 +376,7 @@ function NavItem({
               <span className="flex-1 truncate text-[13px]">{folder.name}</span>
             )}
 
-            {/* Hover action buttons */}
+            {/* Actions */}
             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               <button
                 onClick={(e) => {
@@ -382,7 +384,6 @@ function NavItem({
                   startAddSub();
                 }}
                 className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200/60 rounded transition-all"
-                title="Add subfolder"
               >
                 <Plus className="h-3 w-3" />
               </button>
@@ -393,7 +394,6 @@ function NavItem({
                     onDelete(folder.id);
                 }}
                 className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all"
-                title="Delete folder"
               >
                 <Trash2 className="h-3 w-3" />
               </button>
@@ -420,7 +420,7 @@ function NavItem({
         </ContextMenuContent>
       </ContextMenu>
 
-      {/* Subfolder add input */}
+      {/* Subfolder input */}
       {isAddingSub && (
         <div style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}>
           <form onSubmit={handleAddSub} className="pr-2 mb-0.5">
@@ -435,13 +435,12 @@ function NavItem({
           </form>
         </div>
       )}
-
-      {/* Children rendered by flat list — no nested SortableContext here */}
     </div>
   );
 }
 
-// Render the folder tree as a flat list (for single SortableContext)
+// ─── Flat tree renderer ───────────────────────────────────────
+
 function renderFolderTree(
   folders: Folder[],
   parentId: string | null,
@@ -484,6 +483,8 @@ function renderFolderTree(
   return nodes;
 }
 
+// ─── AppSidebar ───────────────────────────────────────────────
+
 export function AppSidebar({
   activeFolderId,
   onFolderSelect,
@@ -500,13 +501,16 @@ export function AppSidebar({
     position: DropPosition;
   } | null>(null);
 
-  // Auto-expand on hover during drag
-  const hoverExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [hoverExpandTarget, setHoverExpandTarget] = useState<string | null>(null);
+  // Auto-expand timer
+  const hoverExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const hoverExpandTargetRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
-      if (hoverExpandTimerRef.current) clearTimeout(hoverExpandTimerRef.current);
+      if (hoverExpandTimerRef.current)
+        clearTimeout(hoverExpandTimerRef.current);
     };
   }, []);
 
@@ -522,14 +526,10 @@ export function AppSidebar({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
     })
   );
 
-  // Single flat list of all visible folder IDs
-  const visibleFolderIds = getVisibleFolderIds(folders, expandedIds);
+  // ─── Drag handlers ───────────────────────────────────────
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -543,24 +543,21 @@ export function AppSidebar({
       return;
     }
 
-    // Live DOM rect measurement
-    const overElement = document.querySelector(
-      `[data-folder-id="${over.id}"]`
-    );
-    if (!overElement) {
+    // Live DOM rect
+    const el = document.querySelector(`[data-folder-id="${over.id}"]`);
+    if (!el) {
       setDropTarget(null);
       return;
     }
+    const rect = el.getBoundingClientRect();
 
-    const rect = overElement.getBoundingClientRect();
-
-    // Live pointer Y position
+    // Live pointer Y
     const pointerY =
       (event.activatorEvent as MouseEvent).clientY + event.delta.y;
     const relativeY = pointerY - rect.top;
     const height = rect.height;
 
-    // Zone: 30% before / 40% inside / 30% after
+    // 30% before / 40% inside / 30% after
     let position: DropPosition;
     if (relativeY < height * 0.3) {
       position = "before";
@@ -578,20 +575,20 @@ export function AppSidebar({
       position = "after";
     }
 
-    // Auto-expand collapsed folders after 600ms hover
+    // Auto-expand on hover (600ms) — only reset when target changes
+    const overId = over.id as string;
     if (position === "inside") {
-      if (hoverExpandTarget !== over.id) {
+      if (hoverExpandTargetRef.current !== overId) {
         if (hoverExpandTimerRef.current)
           clearTimeout(hoverExpandTimerRef.current);
-        setHoverExpandTarget(over.id as string);
+        hoverExpandTargetRef.current = overId;
         hoverExpandTimerRef.current = setTimeout(() => {
-          const targetId = over.id as string;
-          const hasChildren = folders.some((f) => f.parent_id === targetId);
+          const hasChildren = folders.some((f) => f.parent_id === overId);
           if (hasChildren) {
-            setExpandedIds((prev) => new Set([...prev, targetId]));
+            setExpandedIds((prev) => new Set([...prev, overId]));
           }
           hoverExpandTimerRef.current = null;
-          setHoverExpandTarget(null);
+          hoverExpandTargetRef.current = null;
         }, 600);
       }
     } else {
@@ -599,10 +596,10 @@ export function AppSidebar({
         clearTimeout(hoverExpandTimerRef.current);
         hoverExpandTimerRef.current = null;
       }
-      setHoverExpandTarget(null);
+      hoverExpandTargetRef.current = null;
     }
 
-    setDropTarget({ id: over.id as string, position });
+    setDropTarget({ id: overId, position });
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -610,9 +607,10 @@ export function AppSidebar({
     const currentDropTarget = dropTarget;
 
     // Cleanup
-    if (hoverExpandTimerRef.current) clearTimeout(hoverExpandTimerRef.current);
+    if (hoverExpandTimerRef.current)
+      clearTimeout(hoverExpandTimerRef.current);
     hoverExpandTimerRef.current = null;
-    setHoverExpandTarget(null);
+    hoverExpandTargetRef.current = null;
     setActiveId(null);
     setDropTarget(null);
 
@@ -625,12 +623,15 @@ export function AppSidebar({
 
     const position = currentDropTarget.position;
 
-    // Prevent dropping into own descendants
-    if (position === "inside" && isDescendant(folders, activeNode.id, overNode.id)) {
+    // Prevent circular move
+    if (
+      position === "inside" &&
+      isDescendant(folders, activeNode.id, overNode.id)
+    ) {
       return;
     }
 
-    // Compute optimistic state
+    // Optimistic update
     const { newFolders, updates } = computeOptimisticFolders(
       folders,
       activeNode.id,
@@ -638,15 +639,13 @@ export function AppSidebar({
       position
     );
 
-    // Optimistic UI update
     onFoldersChange(newFolders);
 
-    // Auto-expand target on "inside" drop
     if (position === "inside") {
       setExpandedIds((prev) => new Set([...prev, overNode.id]));
     }
 
-    // Background API calls — revert on failure
+    // Background API — revert on failure
     Promise.all(
       updates.map((u) =>
         folderService.updateFolder(u.id, {
@@ -659,6 +658,17 @@ export function AppSidebar({
       onRefresh();
     });
   };
+
+  const handleDragCancel = () => {
+    if (hoverExpandTimerRef.current)
+      clearTimeout(hoverExpandTimerRef.current);
+    hoverExpandTimerRef.current = null;
+    hoverExpandTargetRef.current = null;
+    setActiveId(null);
+    setDropTarget(null);
+  };
+
+  // ─── Folder CRUD ──────────────────────────────────────────
 
   const handleAddRootFolder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -698,7 +708,7 @@ export function AppSidebar({
     <aside className="w-60 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none shrink-0">
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-4">
-          {/* All Secrets / Root */}
+          {/* All Secrets */}
           <div>
             <div
               className={cn(
@@ -714,7 +724,7 @@ export function AppSidebar({
             </div>
           </div>
 
-          {/* Folders section */}
+          {/* Folders */}
           <div className="space-y-0.5">
             <div className="flex items-center justify-between px-2 pb-1">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400/80">
@@ -750,32 +760,23 @@ export function AppSidebar({
               </form>
             )}
 
-            {/* Single flat SortableContext for ALL visible folders */}
+            {/* DndContext — no SortableContext, no item shifting */}
             <DndContext
               sensors={sensors}
-              collisionDetection={closestCenter}
+              collisionDetection={treeCollision}
               onDragStart={handleDragStart}
               onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
             >
-              <SortableContext
-                items={visibleFolderIds}
-                strategy={verticalListSortingStrategy}
-              >
-                {renderFolderTree(
-                  folders,
-                  null,
-                  expandedIds,
-                  {
-                    activeFolderId,
-                    onFolderSelect,
-                    onDelete: handleDelete,
-                    onRefresh,
-                    onToggleExpand: toggleExpand,
-                    dropTarget,
-                  }
-                )}
-              </SortableContext>
+              {renderFolderTree(folders, null, expandedIds, {
+                activeFolderId,
+                onFolderSelect,
+                onDelete: handleDelete,
+                onRefresh,
+                onToggleExpand: toggleExpand,
+                dropTarget,
+              })}
 
               <DragOverlay
                 dropAnimation={{
