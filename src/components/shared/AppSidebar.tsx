@@ -68,17 +68,6 @@ function isDescendant(
   return false;
 }
 
-function parseGapId(id: string): {
-  parentId: string | null;
-  index: number;
-} | null {
-  if (!id.startsWith("gap::")) return null;
-  const parts = id.split("::");
-  const parentId = parts[1] === "root" ? null : parts[1];
-  const index = parseInt(parts[2], 10);
-  return { parentId, index };
-}
-
 function computeGapDrop(
   folders: Folder[],
   activeId: string,
@@ -90,13 +79,10 @@ function computeGapDrop(
 } {
   const activeNode = folders.find((f) => f.id === activeId)!;
 
-  // Get siblings of the target parent, excluding the dragged item
   const siblings = folders
     .filter((f) => f.parent_id === targetParentId && f.id !== activeId)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-  // Adjust insertIndex: if active is being removed from BEFORE
-  // the insertion point in the same parent, shift down by 1
   let adjustedIndex = insertIndex;
   if (activeNode.parent_id === targetParentId) {
     const allSiblings = folders
@@ -108,28 +94,24 @@ function computeGapDrop(
     }
   }
 
-  // Insert active node at adjusted position
   const newSiblings = [
     ...siblings.slice(0, adjustedIndex),
     activeNode,
     ...siblings.slice(adjustedIndex),
   ];
 
-  // Recompute sort_orders
   const updates = newSiblings.map((f, index) => ({
     id: f.id,
     parent_id: targetParentId,
     sort_order: index,
   }));
 
-  // Check for no-op
   const activeUpdate = updates.find((u) => u.id === activeId);
   if (
     activeUpdate &&
     activeUpdate.parent_id === activeNode.parent_id &&
     activeUpdate.sort_order === activeNode.sort_order
   ) {
-    // Check if all siblings also unchanged
     const allUnchanged = updates.every((u) => {
       const orig = folders.find((f) => f.id === u.id);
       return (
@@ -162,17 +144,15 @@ function computeNestDrop(
 } {
   const activeNode = folders.find((f) => f.id === activeId)!;
 
-  // Children of the target folder (excluding active)
   const targetChildren = folders
     .filter((f) => f.parent_id === targetFolderId && f.id !== activeId)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-  const newSortOrder = targetChildren.length; // append as last child
+  const newSortOrder = targetChildren.length;
 
   const updates: { id: string; parent_id: string | null; sort_order: number }[] =
     [{ id: activeId, parent_id: targetFolderId, sort_order: newSortOrder }];
 
-  // Re-number old siblings to close the gap
   const oldSiblings = folders
     .filter((f) => f.parent_id === activeNode.parent_id && f.id !== activeId)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -194,24 +174,21 @@ function computeNestDrop(
   return { newFolders, updates };
 }
 
-// ─── TreeGap ──────────────────────────────────────────────────
+// ─── TreeGap (zero-height overlay) ───────────────────────────
 
 function TreeGap({
   parentId,
   index,
   depth,
-  isDragActive,
   draggedId,
   allFolders,
 }: {
   parentId: string | null;
   index: number;
   depth: number;
-  isDragActive: boolean;
   draggedId: string | null;
   allFolders: Folder[];
 }) {
-  // Disable if dropping into own descendants
   const isDisabled =
     !draggedId ||
     (parentId !== null && isDescendant(allFolders, draggedId, parentId)) ||
@@ -225,19 +202,18 @@ function TreeGap({
   });
 
   return (
-    <div
-      className="relative transition-[height] duration-150 ease-out overflow-hidden"
-      style={{ height: isDragActive ? 8 : 0 }}
-    >
+    <div className="relative" style={{ height: 0 }}>
+      {/* Invisible 8px hit area overlapping adjacent items */}
       <div
         ref={setNodeRef}
-        className="absolute top-0 bottom-0 right-0"
-        style={{ left: `${8 + depth * 16}px` }}
+        className="absolute right-0 z-10"
+        style={{ left: `${8 + depth * 16}px`, top: -4, height: 8 }}
       />
+      {/* Indicator line */}
       {isOver && !isDisabled && (
         <div
-          className="absolute top-1/2 right-2 h-[2px] -translate-y-1/2 rounded-full bg-indigo-500 shadow-[0_0_6px_rgba(99,102,241,0.5)]"
-          style={{ left: `${8 + depth * 16}px` }}
+          className="absolute right-2 h-[2px] rounded-full bg-indigo-500 shadow-[0_0_6px_rgba(99,102,241,0.5)] z-20 pointer-events-none"
+          style={{ left: `${8 + depth * 16}px`, top: -1 }}
         />
       )}
     </div>
@@ -256,7 +232,6 @@ function NavItem({
   expandedIds,
   onToggleExpand,
   depth,
-  isDragActive,
   draggedId,
   isOverlay = false,
 }: {
@@ -269,7 +244,6 @@ function NavItem({
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
   depth: number;
-  isDragActive: boolean;
   draggedId: string | null;
   isOverlay?: boolean;
 }) {
@@ -279,14 +253,12 @@ function NavItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(folder.name);
 
-  // Disable droppable for self or own descendants
   const isDropDisabled =
     isOverlay ||
     !draggedId ||
     draggedId === folder.id ||
     isDescendant(allFolders, draggedId, folder.id);
 
-  // useDraggable
   const {
     attributes,
     listeners,
@@ -297,14 +269,12 @@ function NavItem({
     disabled: isOverlay,
   });
 
-  // useDroppable — entire item = "inside/nest" target
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: folder.id,
     data: { type: "folder", folderId: folder.id },
     disabled: isDropDisabled,
   });
 
-  // Combine refs
   const setNodeRef = useCallback(
     (el: HTMLElement | null) => {
       setDragRef(el);
@@ -382,7 +352,7 @@ function NavItem({
   };
 
   const isActive = activeFolderId === folder.id;
-  const showNestHighlight = isOver && !isDropDisabled && isDragActive;
+  const showNestHighlight = isOver && !isDropDisabled;
 
   return (
     <div
@@ -394,7 +364,7 @@ function NavItem({
         <ContextMenuTrigger asChild>
           <div
             className={cn(
-              "group relative flex items-center gap-1 rounded-md py-1.25 pr-2 text-[13px] transition-colors cursor-pointer",
+              "group relative flex items-center gap-1.5 rounded-md py-1.5 pr-2 text-sm transition-colors cursor-pointer",
               isActive
                 ? "bg-slate-100 text-slate-900 font-medium"
                 : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
@@ -402,7 +372,7 @@ function NavItem({
                 "bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.12)] ring-1 ring-slate-200/80 rounded-md",
               showNestHighlight && "bg-indigo-50/70 ring-1 ring-indigo-300"
             )}
-            style={{ paddingLeft: `${8 + depth * 16}px` }}
+            style={{ paddingLeft: `${10 + depth * 18}px` }}
             onClick={handleSelect}
             onDoubleClick={(e) => {
               e.stopPropagation();
@@ -416,24 +386,24 @@ function NavItem({
               className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-opacity shrink-0"
               onClick={(e) => e.stopPropagation()}
             >
-              <GripVertical className="h-3 w-3" />
+              <GripVertical className="h-3.5 w-3.5" />
             </div>
 
             {/* Chevron */}
-            <div className="flex items-center justify-center w-3.5 h-3.5 shrink-0">
+            <div className="flex items-center justify-center w-4 h-4 shrink-0">
               {children.length > 0 ? (
                 <button
                   onClick={handleToggle}
                   className="p-0.5 hover:bg-slate-200/80 rounded transition-colors"
                 >
                   {isExpanded ? (
-                    <ChevronDown className="h-3 w-3" />
+                    <ChevronDown className="h-3.5 w-3.5" />
                   ) : (
-                    <ChevronRight className="h-3 w-3" />
+                    <ChevronRight className="h-3.5 w-3.5" />
                   )}
                 </button>
               ) : (
-                <span className="w-3 h-3" />
+                <span className="w-3.5 h-3.5" />
               )}
             </div>
 
@@ -441,14 +411,14 @@ function NavItem({
             {isExpanded && children.length > 0 ? (
               <FolderOpen
                 className={cn(
-                  "h-3.5 w-3.5 shrink-0",
+                  "h-4 w-4 shrink-0",
                   isActive ? "text-indigo-500" : "text-slate-400"
                 )}
               />
             ) : (
               <FolderIcon
                 className={cn(
-                  "h-3.5 w-3.5 shrink-0",
+                  "h-4 w-4 shrink-0",
                   isActive ? "text-indigo-500" : "text-slate-400"
                 )}
               />
@@ -463,7 +433,7 @@ function NavItem({
               >
                 <Input
                   autoFocus
-                  className="h-5 py-0 px-1 text-[13px] rounded border-slate-200 focus:ring-1"
+                  className="h-6 py-0 px-1 text-sm rounded border-slate-200 focus:ring-1"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   onBlur={() => {
@@ -473,7 +443,7 @@ function NavItem({
                 />
               </form>
             ) : (
-              <span className="flex-1 truncate text-[13px]">{folder.name}</span>
+              <span className="flex-1 truncate text-sm">{folder.name}</span>
             )}
 
             {/* Actions */}
@@ -485,7 +455,7 @@ function NavItem({
                 }}
                 className="p-1 text-slate-300 hover:text-slate-600 hover:bg-slate-200/60 rounded transition-all"
               >
-                <Plus className="h-3 w-3" />
+                <Plus className="h-3.5 w-3.5" />
               </button>
               <button
                 onClick={(e) => {
@@ -495,13 +465,13 @@ function NavItem({
                 }}
                 className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all"
               >
-                <Trash2 className="h-3 w-3" />
+                <Trash2 className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
         </ContextMenuTrigger>
 
-        <ContextMenuContent className="w-44">
+        <ContextMenuContent className="w-48">
           <ContextMenuItem className="cursor-pointer" onSelect={startEditing}>
             Rename
           </ContextMenuItem>
@@ -522,12 +492,12 @@ function NavItem({
 
       {/* Subfolder input */}
       {isAddingSub && (
-        <div style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}>
+        <div style={{ paddingLeft: `${10 + (depth + 1) * 18}px` }}>
           <form onSubmit={handleAddSub} className="pr-2 mb-0.5">
             <Input
               autoFocus
               placeholder="Subfolder name..."
-              className="h-6 text-[12px] rounded border-slate-200 bg-white"
+              className="h-7 text-[13px] rounded border-slate-200 bg-white"
               value={newSubName}
               onChange={(e) => setNewSubName(e.target.value)}
               onBlur={() => !newSubName && setIsAddingSub(false)}
@@ -546,7 +516,6 @@ function buildTreeNodes(
   parentId: string | null,
   expandedIds: Set<string>,
   depth: number,
-  isDragActive: boolean,
   draggedId: string | null,
   props: {
     activeFolderId: string | null;
@@ -562,14 +531,12 @@ function buildTreeNodes(
 
   const nodes: React.ReactNode[] = [];
 
-  // Gap before first child
   nodes.push(
     <TreeGap
       key={`gap-${parentId ?? "root"}-0`}
       parentId={parentId}
       index={0}
       depth={depth}
-      isDragActive={isDragActive}
       draggedId={draggedId}
       allFolders={folders}
     />
@@ -578,7 +545,6 @@ function buildTreeNodes(
   for (let i = 0; i < children.length; i++) {
     const folder = children[i];
 
-    // NavItem
     nodes.push(
       <NavItem
         key={folder.id}
@@ -591,12 +557,10 @@ function buildTreeNodes(
         expandedIds={expandedIds}
         onToggleExpand={props.onToggleExpand}
         depth={depth}
-        isDragActive={isDragActive}
         draggedId={draggedId}
       />
     );
 
-    // Expanded children
     if (expandedIds.has(folder.id)) {
       nodes.push(
         ...buildTreeNodes(
@@ -604,30 +568,22 @@ function buildTreeNodes(
           folder.id,
           expandedIds,
           depth + 1,
-          isDragActive,
           draggedId,
           props
         )
       );
     }
 
-    // Gap after this child
     nodes.push(
       <TreeGap
         key={`gap-${parentId ?? "root"}-${i + 1}`}
         parentId={parentId}
         index={i + 1}
         depth={depth}
-        isDragActive={isDragActive}
         draggedId={draggedId}
         allFolders={folders}
       />
     );
-  }
-
-  // If parent is expanded but has no children, emit one gap for dropping into
-  if (children.length === 0 && parentId !== null) {
-    // Gap already pushed above (the first gap) — that handles the empty case
   }
 
   return nodes;
@@ -709,7 +665,6 @@ export function AppSidebar({
 
     const overData = over.data.current;
 
-    // Auto-expand: only when hovering over a folder item (not a gap)
     if (overData?.type === "folder") {
       const folderId = overData.folderId as string;
       if (folderId !== (active.id as string)) {
@@ -736,11 +691,9 @@ export function AppSidebar({
     if (!overData) return;
 
     if (overData.type === "gap") {
-      // Gap drop: reorder/reposition
       const targetParentId = overData.parentId as string | null;
       const insertIndex = overData.index as number;
 
-      // Validate: not dropping into own descendants
       if (
         targetParentId !== null &&
         isDescendant(folders, activeNodeId, targetParentId)
@@ -756,7 +709,7 @@ export function AppSidebar({
         insertIndex
       );
 
-      if (updates.length === 0) return; // no-op
+      if (updates.length === 0) return;
 
       onFoldersChange(newFolders);
 
@@ -772,7 +725,6 @@ export function AppSidebar({
         onRefresh();
       });
     } else if (overData.type === "folder") {
-      // Folder drop: nest inside
       const targetFolderId = overData.folderId as string;
 
       if (activeNodeId === targetFolderId) return;
@@ -841,32 +793,31 @@ export function AppSidebar({
   };
 
   const activeFolder = folders.find((f) => f.id === activeId);
-  const isDragActive = activeId !== null;
 
   return (
-    <aside className="w-60 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none shrink-0">
+    <aside className="w-64 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none shrink-0">
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-4">
           {/* All Secrets */}
           <div>
             <div
               className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.25 text-[13px] font-medium transition-colors cursor-pointer",
+                "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors cursor-pointer",
                 activeFolderId === null
                   ? "bg-slate-100 text-slate-900"
                   : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               )}
               onClick={() => onFolderSelect(null)}
             >
-              <Home className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <Home className="h-4 w-4 shrink-0 text-slate-400" />
               <span>All Secrets</span>
             </div>
           </div>
 
           {/* Folders */}
           <div>
-            <div className="flex items-center justify-between px-2 pb-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400/80">
+            <div className="flex items-center justify-between px-2.5 pb-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400/80">
                 Folders
               </span>
               <Tooltip>
@@ -874,10 +825,10 @@ export function AppSidebar({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-5 w-5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                    className="h-6 w-6 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"
                     onClick={() => setIsAddingRoot(!isAddingRoot)}
                   >
-                    <Plus className="h-3 w-3" />
+                    <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="right">
@@ -887,11 +838,11 @@ export function AppSidebar({
             </div>
 
             {isAddingRoot && (
-              <form onSubmit={handleAddRootFolder} className="px-1 mb-1">
+              <form onSubmit={handleAddRootFolder} className="px-1.5 mb-1.5">
                 <Input
                   autoFocus
                   placeholder="Folder name..."
-                  className="h-7 text-[12px] rounded-md border-slate-200"
+                  className="h-8 text-[13px] rounded-md border-slate-200"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
                   onBlur={() => !newFolderName && setIsAddingRoot(false)}
@@ -912,7 +863,6 @@ export function AppSidebar({
                 null,
                 expandedIds,
                 0,
-                isDragActive,
                 activeId,
                 {
                   activeFolderId,
@@ -941,7 +891,6 @@ export function AppSidebar({
                     expandedIds={expandedIds}
                     onToggleExpand={toggleExpand}
                     depth={0}
-                    isDragActive={false}
                     draggedId={null}
                     isOverlay
                   />
@@ -951,7 +900,7 @@ export function AppSidebar({
 
             {folders.filter((f) => f.parent_id === null).length === 0 &&
               !isAddingRoot && (
-                <p className="px-2 py-6 text-[12px] text-slate-400 text-center">
+                <p className="px-2.5 py-6 text-[13px] text-slate-400 text-center">
                   No folders yet
                 </p>
               )}
