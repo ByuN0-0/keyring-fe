@@ -29,7 +29,6 @@ import {
 import {
   DndContext,
   pointerWithin,
-  closestCenter,
   PointerSensor,
   useSensor,
   useSensors,
@@ -40,11 +39,10 @@ import {
   DragStartEvent,
   DragEndEvent,
   DragOverEvent,
-  CollisionDetection,
 } from "@dnd-kit/core";
 import { useState, useRef, useEffect, useCallback } from "react";
 
-type DropPosition = "before" | "after" | "inside" | null;
+// ─── Types ────────────────────────────────────────────────────
 
 interface AppSidebarProps {
   activeFolderId: string | null;
@@ -70,73 +68,181 @@ function isDescendant(
   return false;
 }
 
-function computeOptimisticFolders(
+function parseGapId(id: string): {
+  parentId: string | null;
+  index: number;
+} | null {
+  if (!id.startsWith("gap::")) return null;
+  const parts = id.split("::");
+  const parentId = parts[1] === "root" ? null : parts[1];
+  const index = parseInt(parts[2], 10);
+  return { parentId, index };
+}
+
+function computeGapDrop(
   folders: Folder[],
   activeId: string,
-  overId: string,
-  position: DropPosition
+  targetParentId: string | null,
+  insertIndex: number
 ): {
   newFolders: Folder[];
   updates: { id: string; parent_id: string | null; sort_order: number }[];
 } {
   const activeNode = folders.find((f) => f.id === activeId)!;
-  const overNode = folders.find((f) => f.id === overId)!;
 
-  if (position === "inside") {
-    const targetChildren = folders
-      .filter((f) => f.parent_id === overNode.id && f.id !== activeNode.id)
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
-    const newSortOrder = targetChildren.length;
-
-    const updates = [
-      { id: activeNode.id, parent_id: overNode.id, sort_order: newSortOrder },
-    ];
-    const newFolders = folders.map((f) =>
-      f.id === activeNode.id
-        ? { ...f, parent_id: overNode.id, sort_order: newSortOrder }
-        : f
-    );
-    return { newFolders, updates };
-  }
-
-  // before / after
-  const targetParentId = overNode.parent_id;
+  // Get siblings of the target parent, excluding the dragged item
   const siblings = folders
-    .filter((f) => f.parent_id === targetParentId && f.id !== activeNode.id)
+    .filter((f) => f.parent_id === targetParentId && f.id !== activeId)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-  const overIndex = siblings.findIndex((f) => f.id === overNode.id);
-  const insertIndex = position === "before" ? overIndex : overIndex + 1;
+  // Adjust insertIndex: if active is being removed from BEFORE
+  // the insertion point in the same parent, shift down by 1
+  let adjustedIndex = insertIndex;
+  if (activeNode.parent_id === targetParentId) {
+    const allSiblings = folders
+      .filter((f) => f.parent_id === targetParentId)
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const currentIndex = allSiblings.findIndex((f) => f.id === activeId);
+    if (currentIndex !== -1 && currentIndex < insertIndex) {
+      adjustedIndex = insertIndex - 1;
+    }
+  }
 
+  // Insert active node at adjusted position
   const newSiblings = [
-    ...siblings.slice(0, insertIndex),
+    ...siblings.slice(0, adjustedIndex),
     activeNode,
-    ...siblings.slice(insertIndex),
+    ...siblings.slice(adjustedIndex),
   ];
 
+  // Recompute sort_orders
   const updates = newSiblings.map((f, index) => ({
     id: f.id,
     parent_id: targetParentId,
     sort_order: index,
   }));
 
+  // Check for no-op
+  const activeUpdate = updates.find((u) => u.id === activeId);
+  if (
+    activeUpdate &&
+    activeUpdate.parent_id === activeNode.parent_id &&
+    activeUpdate.sort_order === activeNode.sort_order
+  ) {
+    // Check if all siblings also unchanged
+    const allUnchanged = updates.every((u) => {
+      const orig = folders.find((f) => f.id === u.id);
+      return (
+        orig &&
+        orig.parent_id === u.parent_id &&
+        orig.sort_order === u.sort_order
+      );
+    });
+    if (allUnchanged) return { newFolders: folders, updates: [] };
+  }
+
   const updateMap = new Map(updates.map((u) => [u.id, u]));
   const newFolders = folders.map((f) => {
     const update = updateMap.get(f.id);
-    if (update)
-      return { ...f, parent_id: update.parent_id, sort_order: update.sort_order };
-    return f;
+    return update
+      ? { ...f, parent_id: update.parent_id, sort_order: update.sort_order }
+      : f;
   });
 
   return { newFolders, updates };
 }
 
-// Custom collision: pointerWithin first, closestCenter fallback
-const treeCollision: CollisionDetection = (args) => {
-  const pointer = pointerWithin(args);
-  if (pointer.length > 0) return pointer;
-  return closestCenter(args);
-};
+function computeNestDrop(
+  folders: Folder[],
+  activeId: string,
+  targetFolderId: string
+): {
+  newFolders: Folder[];
+  updates: { id: string; parent_id: string | null; sort_order: number }[];
+} {
+  const activeNode = folders.find((f) => f.id === activeId)!;
+
+  // Children of the target folder (excluding active)
+  const targetChildren = folders
+    .filter((f) => f.parent_id === targetFolderId && f.id !== activeId)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+  const newSortOrder = targetChildren.length; // append as last child
+
+  const updates: { id: string; parent_id: string | null; sort_order: number }[] =
+    [{ id: activeId, parent_id: targetFolderId, sort_order: newSortOrder }];
+
+  // Re-number old siblings to close the gap
+  const oldSiblings = folders
+    .filter((f) => f.parent_id === activeNode.parent_id && f.id !== activeId)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+  oldSiblings.forEach((f, index) => {
+    if (f.sort_order !== index) {
+      updates.push({ id: f.id, parent_id: f.parent_id, sort_order: index });
+    }
+  });
+
+  const updateMap = new Map(updates.map((u) => [u.id, u]));
+  const newFolders = folders.map((f) => {
+    const update = updateMap.get(f.id);
+    return update
+      ? { ...f, parent_id: update.parent_id, sort_order: update.sort_order }
+      : f;
+  });
+
+  return { newFolders, updates };
+}
+
+// ─── TreeGap ──────────────────────────────────────────────────
+
+function TreeGap({
+  parentId,
+  index,
+  depth,
+  isDragActive,
+  draggedId,
+  allFolders,
+}: {
+  parentId: string | null;
+  index: number;
+  depth: number;
+  isDragActive: boolean;
+  draggedId: string | null;
+  allFolders: Folder[];
+}) {
+  // Disable if dropping into own descendants
+  const isDisabled =
+    !draggedId ||
+    (parentId !== null && isDescendant(allFolders, draggedId, parentId)) ||
+    parentId === draggedId;
+
+  const gapId = `gap::${parentId ?? "root"}::${index}`;
+  const { setNodeRef, isOver } = useDroppable({
+    id: gapId,
+    data: { type: "gap", parentId, index },
+    disabled: isDisabled,
+  });
+
+  return (
+    <div
+      className="relative transition-[height] duration-150 ease-out overflow-hidden"
+      style={{ height: isDragActive ? 8 : 0 }}
+    >
+      <div
+        ref={setNodeRef}
+        className="absolute top-0 bottom-0 right-0"
+        style={{ left: `${8 + depth * 16}px` }}
+      />
+      {isOver && !isDisabled && (
+        <div
+          className="absolute top-1/2 right-2 h-[2px] -translate-y-1/2 rounded-full bg-indigo-500 shadow-[0_0_6px_rgba(99,102,241,0.5)]"
+          style={{ left: `${8 + depth * 16}px` }}
+        />
+      )}
+    </div>
+  );
+}
 
 // ─── NavItem ──────────────────────────────────────────────────
 
@@ -149,7 +255,9 @@ function NavItem({
   onRefresh,
   expandedIds,
   onToggleExpand,
-  dropTarget,
+  depth,
+  isDragActive,
+  draggedId,
   isOverlay = false,
 }: {
   folder: Folder;
@@ -160,7 +268,9 @@ function NavItem({
   onRefresh: () => void;
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
-  dropTarget: { id: string; position: DropPosition } | null;
+  depth: number;
+  isDragActive: boolean;
+  draggedId: string | null;
   isOverlay?: boolean;
 }) {
   const isExpanded = expandedIds.has(folder.id);
@@ -169,7 +279,14 @@ function NavItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(folder.name);
 
-  // useDraggable — no item shifting
+  // Disable droppable for self or own descendants
+  const isDropDisabled =
+    isOverlay ||
+    !draggedId ||
+    draggedId === folder.id ||
+    isDescendant(allFolders, draggedId, folder.id);
+
+  // useDraggable
   const {
     attributes,
     listeners,
@@ -180,9 +297,11 @@ function NavItem({
     disabled: isOverlay,
   });
 
-  // useDroppable — register as drop target
-  const { setNodeRef: setDropRef } = useDroppable({
+  // useDroppable — entire item = "inside/nest" target
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: folder.id,
+    data: { type: "folder", folderId: folder.id },
+    disabled: isDropDisabled,
   });
 
   // Combine refs
@@ -193,9 +312,6 @@ function NavItem({
     },
     [setDragRef, setDropRef]
   );
-
-  const isDropTarget = dropTarget?.id === folder.id;
-  const dropPosition = isDropTarget ? dropTarget.position : null;
 
   const children = allFolders
     .filter((f) => f.parent_id === folder.id)
@@ -266,15 +382,7 @@ function NavItem({
   };
 
   const isActive = activeFolderId === folder.id;
-
-  // Depth for indentation
-  let depth = 0;
-  let pid = folder.parent_id;
-  while (pid) {
-    depth++;
-    const p = allFolders.find((f) => f.id === pid);
-    pid = p?.parent_id || null;
-  }
+  const showNestHighlight = isOver && !isDropDisabled && isDragActive;
 
   return (
     <div
@@ -292,8 +400,7 @@ function NavItem({
                 : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
               isOverlay &&
                 "bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.12)] ring-1 ring-slate-200/80 rounded-md",
-              dropPosition === "inside" &&
-                "bg-indigo-50/70 ring-1 ring-indigo-300"
+              showNestHighlight && "bg-indigo-50/70 ring-1 ring-indigo-300"
             )}
             style={{ paddingLeft: `${8 + depth * 16}px` }}
             onClick={handleSelect}
@@ -302,13 +409,6 @@ function NavItem({
               startEditing();
             }}
           >
-            {dropPosition === "before" && (
-              <div className="drop-indicator -top-px" />
-            )}
-            {dropPosition === "after" && (
-              <div className="drop-indicator -bottom-px" />
-            )}
-
             {/* Drag handle */}
             <div
               {...attributes}
@@ -439,19 +539,21 @@ function NavItem({
   );
 }
 
-// ─── Flat tree renderer ───────────────────────────────────────
+// ─── Build tree nodes (Gap + NavItem interleaved) ─────────────
 
-function renderFolderTree(
+function buildTreeNodes(
   folders: Folder[],
   parentId: string | null,
   expandedIds: Set<string>,
+  depth: number,
+  isDragActive: boolean,
+  draggedId: string | null,
   props: {
     activeFolderId: string | null;
     onFolderSelect: (folderId: string | null) => void;
     onDelete: (id: string) => void;
     onRefresh: () => void;
     onToggleExpand: (id: string) => void;
-    dropTarget: { id: string; position: DropPosition } | null;
   }
 ): React.ReactNode[] {
   const children = folders
@@ -459,7 +561,24 @@ function renderFolderTree(
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
   const nodes: React.ReactNode[] = [];
-  for (const folder of children) {
+
+  // Gap before first child
+  nodes.push(
+    <TreeGap
+      key={`gap-${parentId ?? "root"}-0`}
+      parentId={parentId}
+      index={0}
+      depth={depth}
+      isDragActive={isDragActive}
+      draggedId={draggedId}
+      allFolders={folders}
+    />
+  );
+
+  for (let i = 0; i < children.length; i++) {
+    const folder = children[i];
+
+    // NavItem
     nodes.push(
       <NavItem
         key={folder.id}
@@ -471,15 +590,46 @@ function renderFolderTree(
         onRefresh={props.onRefresh}
         expandedIds={expandedIds}
         onToggleExpand={props.onToggleExpand}
-        dropTarget={props.dropTarget}
+        depth={depth}
+        isDragActive={isDragActive}
+        draggedId={draggedId}
       />
     );
+
+    // Expanded children
     if (expandedIds.has(folder.id)) {
       nodes.push(
-        ...renderFolderTree(folders, folder.id, expandedIds, props)
+        ...buildTreeNodes(
+          folders,
+          folder.id,
+          expandedIds,
+          depth + 1,
+          isDragActive,
+          draggedId,
+          props
+        )
       );
     }
+
+    // Gap after this child
+    nodes.push(
+      <TreeGap
+        key={`gap-${parentId ?? "root"}-${i + 1}`}
+        parentId={parentId}
+        index={i + 1}
+        depth={depth}
+        isDragActive={isDragActive}
+        draggedId={draggedId}
+        allFolders={folders}
+      />
+    );
   }
+
+  // If parent is expanded but has no children, emit one gap for dropping into
+  if (children.length === 0 && parentId !== null) {
+    // Gap already pushed above (the first gap) — that handles the empty case
+  }
+
   return nodes;
 }
 
@@ -496,10 +646,6 @@ export function AppSidebar({
   const [newFolderName, setNewFolderName] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [dropTarget, setDropTarget] = useState<{
-    id: string;
-    position: DropPosition;
-  } | null>(null);
 
   // Auto-expand timer
   const hoverExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -507,12 +653,30 @@ export function AppSidebar({
   );
   const hoverExpandTargetRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (hoverExpandTimerRef.current)
-        clearTimeout(hoverExpandTimerRef.current);
-    };
+  const clearAutoExpandTimer = useCallback(() => {
+    if (hoverExpandTimerRef.current) {
+      clearTimeout(hoverExpandTimerRef.current);
+      hoverExpandTimerRef.current = null;
+    }
+    hoverExpandTargetRef.current = null;
   }, []);
+
+  const startAutoExpandTimer = useCallback(
+    (folderId: string) => {
+      if (hoverExpandTargetRef.current === folderId) return;
+      clearAutoExpandTimer();
+      hoverExpandTargetRef.current = folderId;
+      hoverExpandTimerRef.current = setTimeout(() => {
+        setExpandedIds((prev) => new Set([...prev, folderId]));
+        hoverExpandTimerRef.current = null;
+      }, 600);
+    },
+    [clearAutoExpandTimer]
+  );
+
+  useEffect(() => {
+    return () => clearAutoExpandTimer();
+  }, [clearAutoExpandTimer]);
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -538,134 +702,108 @@ export function AppSidebar({
   const handleDragOver = (event: DragOverEvent) => {
     const { active, over } = event;
 
-    if (!over || active.id === over.id) {
-      setDropTarget(null);
+    if (!over) {
+      clearAutoExpandTimer();
       return;
     }
 
-    // Live DOM rect
-    const el = document.querySelector(`[data-folder-id="${over.id}"]`);
-    if (!el) {
-      setDropTarget(null);
-      return;
-    }
-    const rect = el.getBoundingClientRect();
+    const overData = over.data.current;
 
-    // Live pointer Y
-    const pointerY =
-      (event.activatorEvent as MouseEvent).clientY + event.delta.y;
-    const relativeY = pointerY - rect.top;
-    const height = rect.height;
-
-    // 30% before / 40% inside / 30% after
-    let position: DropPosition;
-    if (relativeY < height * 0.3) {
-      position = "before";
-    } else if (relativeY > height * 0.7) {
-      position = "after";
-    } else {
-      position = "inside";
-    }
-
-    // Prevent dropping into own descendants
-    if (
-      position === "inside" &&
-      isDescendant(folders, active.id as string, over.id as string)
-    ) {
-      position = "after";
-    }
-
-    // Auto-expand on hover (600ms) — only reset when target changes
-    const overId = over.id as string;
-    if (position === "inside") {
-      if (hoverExpandTargetRef.current !== overId) {
-        if (hoverExpandTimerRef.current)
-          clearTimeout(hoverExpandTimerRef.current);
-        hoverExpandTargetRef.current = overId;
-        hoverExpandTimerRef.current = setTimeout(() => {
-          const hasChildren = folders.some((f) => f.parent_id === overId);
-          if (hasChildren) {
-            setExpandedIds((prev) => new Set([...prev, overId]));
-          }
-          hoverExpandTimerRef.current = null;
-          hoverExpandTargetRef.current = null;
-        }, 600);
+    // Auto-expand: only when hovering over a folder item (not a gap)
+    if (overData?.type === "folder") {
+      const folderId = overData.folderId as string;
+      if (folderId !== (active.id as string)) {
+        startAutoExpandTimer(folderId);
+      } else {
+        clearAutoExpandTimer();
       }
     } else {
-      if (hoverExpandTimerRef.current) {
-        clearTimeout(hoverExpandTimerRef.current);
-        hoverExpandTimerRef.current = null;
-      }
-      hoverExpandTargetRef.current = null;
+      clearAutoExpandTimer();
     }
-
-    setDropTarget({ id: overId, position });
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    const currentDropTarget = dropTarget;
 
-    // Cleanup
-    if (hoverExpandTimerRef.current)
-      clearTimeout(hoverExpandTimerRef.current);
-    hoverExpandTimerRef.current = null;
-    hoverExpandTargetRef.current = null;
+    clearAutoExpandTimer();
     setActiveId(null);
-    setDropTarget(null);
 
-    if (!over || !currentDropTarget) return;
+    if (!over) return;
 
-    const activeNode = folders.find((f) => f.id === active.id);
-    const overNode = folders.find((f) => f.id === currentDropTarget.id);
+    const activeNodeId = active.id as string;
+    const overData = over.data.current;
 
-    if (!activeNode || !overNode || active.id === over.id) return;
+    if (!overData) return;
 
-    const position = currentDropTarget.position;
+    if (overData.type === "gap") {
+      // Gap drop: reorder/reposition
+      const targetParentId = overData.parentId as string | null;
+      const insertIndex = overData.index as number;
 
-    // Prevent circular move
-    if (
-      position === "inside" &&
-      isDescendant(folders, activeNode.id, overNode.id)
-    ) {
-      return;
+      // Validate: not dropping into own descendants
+      if (
+        targetParentId !== null &&
+        isDescendant(folders, activeNodeId, targetParentId)
+      ) {
+        return;
+      }
+      if (targetParentId === activeNodeId) return;
+
+      const { newFolders, updates } = computeGapDrop(
+        folders,
+        activeNodeId,
+        targetParentId,
+        insertIndex
+      );
+
+      if (updates.length === 0) return; // no-op
+
+      onFoldersChange(newFolders);
+
+      Promise.all(
+        updates.map((u) =>
+          folderService.updateFolder(u.id, {
+            parent_id: u.parent_id,
+            sort_order: u.sort_order,
+          })
+        )
+      ).catch((err) => {
+        console.error("Failed to move folder, reverting", err);
+        onRefresh();
+      });
+    } else if (overData.type === "folder") {
+      // Folder drop: nest inside
+      const targetFolderId = overData.folderId as string;
+
+      if (activeNodeId === targetFolderId) return;
+      if (isDescendant(folders, activeNodeId, targetFolderId)) return;
+
+      const { newFolders, updates } = computeNestDrop(
+        folders,
+        activeNodeId,
+        targetFolderId
+      );
+
+      onFoldersChange(newFolders);
+      setExpandedIds((prev) => new Set([...prev, targetFolderId]));
+
+      Promise.all(
+        updates.map((u) =>
+          folderService.updateFolder(u.id, {
+            parent_id: u.parent_id,
+            sort_order: u.sort_order,
+          })
+        )
+      ).catch((err) => {
+        console.error("Failed to nest folder, reverting", err);
+        onRefresh();
+      });
     }
-
-    // Optimistic update
-    const { newFolders, updates } = computeOptimisticFolders(
-      folders,
-      activeNode.id,
-      overNode.id,
-      position
-    );
-
-    onFoldersChange(newFolders);
-
-    if (position === "inside") {
-      setExpandedIds((prev) => new Set([...prev, overNode.id]));
-    }
-
-    // Background API — revert on failure
-    Promise.all(
-      updates.map((u) =>
-        folderService.updateFolder(u.id, {
-          parent_id: u.parent_id,
-          sort_order: u.sort_order,
-        })
-      )
-    ).catch((err) => {
-      console.error("Failed to move folder, reverting", err);
-      onRefresh();
-    });
   };
 
   const handleDragCancel = () => {
-    if (hoverExpandTimerRef.current)
-      clearTimeout(hoverExpandTimerRef.current);
-    hoverExpandTimerRef.current = null;
-    hoverExpandTargetRef.current = null;
+    clearAutoExpandTimer();
     setActiveId(null);
-    setDropTarget(null);
   };
 
   // ─── Folder CRUD ──────────────────────────────────────────
@@ -703,6 +841,7 @@ export function AppSidebar({
   };
 
   const activeFolder = folders.find((f) => f.id === activeId);
+  const isDragActive = activeId !== null;
 
   return (
     <aside className="w-60 border-r border-slate-100 bg-white flex flex-col overflow-hidden select-none shrink-0">
@@ -725,7 +864,7 @@ export function AppSidebar({
           </div>
 
           {/* Folders */}
-          <div className="space-y-0.5">
+          <div>
             <div className="flex items-center justify-between px-2 pb-1">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400/80">
                 Folders
@@ -760,23 +899,29 @@ export function AppSidebar({
               </form>
             )}
 
-            {/* DndContext — no SortableContext, no item shifting */}
             <DndContext
               sensors={sensors}
-              collisionDetection={treeCollision}
+              collisionDetection={pointerWithin}
               onDragStart={handleDragStart}
               onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
-              {renderFolderTree(folders, null, expandedIds, {
-                activeFolderId,
-                onFolderSelect,
-                onDelete: handleDelete,
-                onRefresh,
-                onToggleExpand: toggleExpand,
-                dropTarget,
-              })}
+              {buildTreeNodes(
+                folders,
+                null,
+                expandedIds,
+                0,
+                isDragActive,
+                activeId,
+                {
+                  activeFolderId,
+                  onFolderSelect,
+                  onDelete: handleDelete,
+                  onRefresh,
+                  onToggleExpand: toggleExpand,
+                }
+              )}
 
               <DragOverlay
                 dropAnimation={{
@@ -795,7 +940,9 @@ export function AppSidebar({
                     onRefresh={onRefresh}
                     expandedIds={expandedIds}
                     onToggleExpand={toggleExpand}
-                    dropTarget={null}
+                    depth={0}
+                    isDragActive={false}
+                    draggedId={null}
                     isOverlay
                   />
                 ) : null}
