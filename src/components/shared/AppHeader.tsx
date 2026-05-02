@@ -18,9 +18,13 @@ import {
 export function AppHeader({
   user,
   expiresAt,
+  onSessionExpired,
+  onLogout,
 }: {
   user: User;
   expiresAt: number;
+  onSessionExpired?: () => void;
+  onLogout?: () => void;
 }) {
   const [timeLeft, setTimeLeft] = useState("");
   const [isExpiringSoon, setIsExpiringSoon] = useState(false);
@@ -32,6 +36,7 @@ export function AppHeader({
       const diff = expiresAt - now;
       if (diff <= 0) {
         clearInterval(timer);
+        onSessionExpired?.();
         router.push("/login");
       } else {
         const mins = Math.floor(diff / 60000);
@@ -41,9 +46,10 @@ export function AppHeader({
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [expiresAt, router]);
+  }, [expiresAt, onSessionExpired, router]);
 
   const handleLogout = async () => {
+    onLogout?.();
     await authService.logout();
     router.push("/login");
   };

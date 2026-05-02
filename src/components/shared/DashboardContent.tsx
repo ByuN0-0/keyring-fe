@@ -46,6 +46,30 @@ export function DashboardContent() {
   const [error, setError] = useState("");
   const [isEditing, setIsEditing] = useState(false);
 
+  const lockVault = useCallback(() => {
+    setPassphrase("");
+    setDecryptedValues({});
+    setVisibleSecrets({});
+    setEditState([]);
+    setIsEditing(false);
+  }, []);
+
+  const handleFolderSelect = useCallback(
+    (folderId: string | null) => {
+      if (folderId !== activeFolderId) lockVault();
+      setActiveFolderId(folderId);
+    },
+    [activeFolderId, lockVault]
+  );
+
+  const handlePassphraseChange = (value: string) => {
+    setPassphrase(value);
+    setDecryptedValues({});
+    setVisibleSecrets({});
+    setEditState([]);
+    setIsEditing(false);
+  };
+
   const loadInitialData = useCallback(async () => {
     try {
       const me = await authService.getMe();
@@ -81,6 +105,29 @@ export function DashboardContent() {
   useEffect(() => {
     if (!isLoading) loadSecrets();
   }, [loadSecrets, isLoading]);
+
+  useEffect(() => {
+    const lockAfterMs = 5 * 60 * 1000;
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(lockVault, lockAfterMs);
+    };
+
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach((eventName) =>
+      window.addEventListener(eventName, resetTimer, { passive: true })
+    );
+    resetTimer();
+
+    return () => {
+      clearTimeout(timeoutId);
+      events.forEach((eventName) =>
+        window.removeEventListener(eventName, resetTimer)
+      );
+    };
+  }, [lockVault]);
 
   if (isLoading) {
     return (
@@ -250,12 +297,17 @@ export function DashboardContent() {
 
   return (
     <div className="flex h-screen flex-col bg-[#F8FAFC] text-slate-900">
-      <AppHeader user={session.user} expiresAt={session.expiresAt} />
+      <AppHeader
+        user={session.user}
+        expiresAt={session.expiresAt}
+        onSessionExpired={lockVault}
+        onLogout={lockVault}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         <AppSidebar
           activeFolderId={activeFolderId}
-          onFolderSelect={setActiveFolderId}
+          onFolderSelect={handleFolderSelect}
           folders={folders}
           onFoldersChange={setFolders}
           onRefresh={refreshAll}
@@ -361,7 +413,7 @@ export function DashboardContent() {
                   placeholder="Enter passphrase to unlock"
                   className="h-9 bg-slate-50 border-slate-200 font-mono text-sm rounded-lg"
                   value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
+                  onChange={(e) => handlePassphraseChange(e.target.value)}
                 />
               </div>
             </div>
