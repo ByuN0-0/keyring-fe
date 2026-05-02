@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { AppHeader } from "./AppHeader";
 import { AppSidebar } from "./AppSidebar";
+import { PassphrasePanel } from "./PassphrasePanel";
+import { SecretDeleteDialog } from "./SecretDeleteDialog";
 import {
   Plus,
   Eye,
@@ -25,17 +27,6 @@ import {
   Check,
   Loader2,
 } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { cn } from "@/lib/utils";
 import { v4 as uuidv4 } from "uuid";
 
 export function DashboardContent() {
@@ -439,47 +430,10 @@ export function DashboardContent() {
               </div>
             </div>
 
-            {/* Passphrase card */}
-            <div
-              className={cn(
-                "flex flex-col md:flex-row items-center gap-4 rounded-xl bg-white border p-4 transition-all duration-300",
-                passphrase
-                  ? "border-emerald-200 border-l-2 border-l-emerald-500"
-                  : "border-slate-200 border-l-2 border-l-indigo-400"
-              )}
-            >
-              <div
-                className={cn(
-                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all duration-300",
-                  passphrase
-                    ? "bg-emerald-50 text-emerald-600"
-                    : "bg-indigo-50 text-indigo-500"
-                )}
-              >
-                {passphrase ? (
-                  <ShieldCheck className="h-5 w-5" />
-                ) : (
-                  <ShieldAlert className="h-5 w-5" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-slate-800">
-                  Master Passphrase
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  암호화 및 복호화를 위한 키입니다. 서버에 저장되지 않습니다.
-                </p>
-              </div>
-              <div className="w-full md:w-72">
-                <Input
-                  type="password"
-                  placeholder="Enter passphrase to unlock"
-                  className="h-9 bg-slate-50 border-slate-200 font-mono text-sm rounded-lg"
-                  value={passphrase}
-                  onChange={(e) => handlePassphraseChange(e.target.value)}
-                />
-              </div>
-            </div>
+            <PassphrasePanel
+              passphrase={passphrase}
+              onPassphraseChange={handlePassphraseChange}
+            />
 
             {/* Error message */}
             {error && (
@@ -675,33 +629,13 @@ export function DashboardContent() {
         </main>
       </div>
 
-      <AlertDialog
-        open={Boolean(pendingDeleteSecret)}
+      <SecretDeleteDialog
+        secret={pendingDeleteSecret}
         onOpenChange={(open) => {
           if (!open) setPendingDeleteSecret(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>시크릿 삭제</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingDeleteSecret?.name} 항목을 삭제합니다. 이 작업은 되돌릴 수
-              없습니다.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>취소</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-red-600 text-white hover:bg-red-700"
-              onClick={() => {
-                if (pendingDeleteSecret) handleDelete(pendingDeleteSecret.id);
-              }}
-            >
-              삭제
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onConfirm={(secret) => handleDelete(secret.id)}
+      />
     </div>
   );
 }
