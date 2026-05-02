@@ -21,7 +21,20 @@ import {
   ShieldAlert,
   Trash2,
   ChevronRight,
+  Copy,
+  Check,
+  Loader2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { v4 as uuidv4 } from "uuid";
 
@@ -45,6 +58,11 @@ export function DashboardContent() {
   );
   const [error, setError] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [copiedSecretId, setCopiedSecretId] = useState<string | null>(null);
+  const [pendingDeleteSecret, setPendingDeleteSecret] = useState<Secret | null>(
+    null
+  );
 
   const lockVault = useCallback(() => {
     setPassphrase("");
@@ -52,6 +70,7 @@ export function DashboardContent() {
     setVisibleSecrets({});
     setEditState([]);
     setIsEditing(false);
+    setRowErrors({});
   }, []);
 
   const handleFolderSelect = useCallback(
@@ -68,6 +87,7 @@ export function DashboardContent() {
     setVisibleSecrets({});
     setEditState([]);
     setIsEditing(false);
+    setRowErrors({});
   };
 
   const loadInitialData = useCallback(async () => {
@@ -162,10 +182,10 @@ export function DashboardContent() {
   const breadcrumb = buildBreadcrumb();
 
   const handleDelete = async (id: string) => {
-    if (!confirm("이 시크릿을 삭제하시겠습니까?")) return;
     try {
       await secretService.deleteSecret(id);
-      loadSecrets();
+      setPendingDeleteSecret(null);
+      await loadSecrets();
     } catch {
       setError("삭제에 실패했습니다.");
     }
@@ -232,6 +252,7 @@ export function DashboardContent() {
       setEditState(initialEditState);
       setIsEditing(true);
       setError("");
+      setRowErrors({});
     } catch (err) {
       console.error(err);
       setError("편집 모드 전환 중 오류가 발생했습니다.");
@@ -245,24 +266,39 @@ export function DashboardContent() {
       setError("마스터 패스프레이즈를 먼저 입력해주세요.");
       return;
     }
+    const nextRowErrors: Record<string, string> = {};
+    for (const editItem of editState) {
+      if (!editItem.name.trim()) {
+        nextRowErrors[editItem.id] = "키 이름을 입력해주세요.";
+      } else if (!editItem.value.trim()) {
+        nextRowErrors[editItem.id] = "값을 입력해주세요.";
+      }
+    }
+
+    if (Object.keys(nextRowErrors).length > 0) {
+      setRowErrors(nextRowErrors);
+      setError("저장할 수 없는 항목이 있습니다.");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const currentIds = new Set(editState.map((e) => e.id));
-      const itemsToDelete = secrets.filter((item) => !currentIds.has(item.id));
-      for (const item of itemsToDelete) {
-        await secretService.deleteSecret(item.id);
-      }
+      const itemsToDelete = secrets
+        .filter((item) => !currentIds.has(item.id))
+        .map((item) => item.id);
+      const createPayload: Partial<Secret>[] = [];
+      const updatePayload: Partial<Secret>[] = [];
 
       for (const editItem of editState) {
-        if (!editItem.name || !editItem.value) continue;
         const { encrypted_blob, salt } = await encryptData(
           editItem.value,
           passphrase
         );
         if (editItem.isNew) {
-          await secretService.createSecret({
+          createPayload.push({
             id: editItem.id,
-            name: editItem.name,
+            name: editItem.name.trim(),
             encrypted_blob,
             salt,
             folder_id: activeFolderId,
@@ -270,11 +306,12 @@ export function DashboardContent() {
         } else {
           const original = secrets.find((i) => i.id === editItem.id);
           const hasChanged =
-            original?.name !== editItem.name ||
+            original?.name !== editItem.name.trim() ||
             decryptedValues[editItem.id] !== editItem.value;
           if (hasChanged) {
-            await secretService.updateSecret(editItem.id, {
-              name: editItem.name,
+            updatePayload.push({
+              id: editItem.id,
+              name: editItem.name.trim(),
               encrypted_blob,
               salt,
               folder_id: activeFolderId,
@@ -283,8 +320,15 @@ export function DashboardContent() {
         }
       }
 
+      await secretService.batchUpdateSecrets({
+        create: createPayload,
+        update: updatePayload,
+        delete: itemsToDelete,
+      });
+
       setIsEditing(false);
       setEditState([]);
+      setRowErrors({});
       await loadSecrets();
       setError("");
     } catch (err) {
@@ -292,6 +336,16 @@ export function DashboardContent() {
       setError("저장에 실패했습니다. 패스프레이즈를 확인하세요.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleCopy = async (secretId: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedSecretId(secretId);
+      window.setTimeout(() => setCopiedSecretId(null), 1500);
+    } catch {
+      setError("클립보드에 복사하지 못했습니다.");
     }
   };
 
@@ -351,17 +405,26 @@ export function DashboardContent() {
                       onClick={() => {
                         setIsEditing(false);
                         setEditState([]);
+                        setRowErrors({});
                       }}
                       variant="ghost"
                       className="h-8 rounded-lg px-3 text-slate-500 hover:bg-slate-100 text-xs font-medium"
                     >
-                      Cancel
+                      취소
                     </Button>
                     <Button
                       onClick={handleSaveBatch}
+                      disabled={isLoading}
                       className="h-8 rounded-lg bg-indigo-600 font-medium text-white hover:bg-indigo-700 px-4 text-xs shadow-sm"
                     >
-                      Save changes
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          저장 중
+                        </>
+                      ) : (
+                        "변경 저장"
+                      )}
                     </Button>
                   </>
                 ) : (
@@ -370,7 +433,7 @@ export function DashboardContent() {
                     variant="outline"
                     className="h-8 rounded-lg px-4 border-slate-200 text-slate-600 font-medium hover:bg-slate-50 text-xs"
                   >
-                    Edit
+                    편집
                   </Button>
                 )}
               </div>
@@ -443,7 +506,13 @@ export function DashboardContent() {
                             const newState = [...editState];
                             newState[index].name = e.target.value;
                             setEditState(newState);
+                            setRowErrors((prev) => {
+                              const next = { ...prev };
+                              delete next[editItem.id];
+                              return next;
+                            });
                           }}
+                          aria-invalid={Boolean(rowErrors[editItem.id])}
                         />
                       </div>
                       <div className="flex-[1.5] w-full">
@@ -455,8 +524,19 @@ export function DashboardContent() {
                             const newState = [...editState];
                             newState[index].value = e.target.value;
                             setEditState(newState);
+                            setRowErrors((prev) => {
+                              const next = { ...prev };
+                              delete next[editItem.id];
+                              return next;
+                            });
                           }}
+                          aria-invalid={Boolean(rowErrors[editItem.id])}
                         />
+                        {rowErrors[editItem.id] && (
+                          <p className="mt-1 text-xs font-medium text-red-500">
+                            {rowErrors[editItem.id]}
+                          </p>
+                        )}
                       </div>
                       <Button
                         variant="ghost"
@@ -501,6 +581,22 @@ export function DashboardContent() {
                                     : "••••••••••"}
                                 </code>
                                 <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopy(item.id, decryptedValues[item.id]);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
+                                  title="복사"
+                                >
+                                  {copiedSecretId === item.id ? (
+                                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setVisibleSecrets((prev) => ({
@@ -509,6 +605,7 @@ export function DashboardContent() {
                                     }));
                                   }}
                                   className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
+                                  title={visibleSecrets[item.id] ? "숨기기" : "보기"}
                                 >
                                   {visibleSecrets[item.id] ? (
                                     <EyeOff className="h-3.5 w-3.5" />
@@ -525,7 +622,7 @@ export function DashboardContent() {
                                 }}
                                 className="text-[11px] font-medium text-indigo-500 hover:text-indigo-700 underline underline-offset-4 decoration-indigo-200 transition-colors"
                               >
-                                Unlock
+                                잠금 해제
                               </button>
                             )}
                           </div>
@@ -538,7 +635,7 @@ export function DashboardContent() {
                           size="icon"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDelete(item.id);
+                            setPendingDeleteSecret(item);
                           }}
                           className="h-7 w-7 text-slate-300 hover:text-red-500 rounded-md"
                         >
@@ -554,10 +651,10 @@ export function DashboardContent() {
                     <Key className="h-6 w-6 text-slate-300" />
                   </div>
                   <p className="text-sm font-medium text-slate-400">
-                    No secrets in this folder
+                    이 폴더에 시크릿이 없습니다
                   </p>
                   <p className="text-xs text-slate-300 mt-1">
-                    Click Edit to add your first secret
+                    편집을 눌러 첫 시크릿을 추가하세요
                   </p>
                 </div>
               )}
@@ -569,7 +666,7 @@ export function DashboardContent() {
                     variant="secondary"
                     className="text-[11px] text-slate-400 bg-transparent border-0 px-0"
                   >
-                    {secrets.length} secret{secrets.length !== 1 ? "s" : ""}
+                    시크릿 {secrets.length}개
                   </Badge>
                 </div>
               )}
@@ -577,6 +674,34 @@ export function DashboardContent() {
           </div>
         </main>
       </div>
+
+      <AlertDialog
+        open={Boolean(pendingDeleteSecret)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteSecret(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>시크릿 삭제</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDeleteSecret?.name} 항목을 삭제합니다. 이 작업은 되돌릴 수
+              없습니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => {
+                if (pendingDeleteSecret) handleDelete(pendingDeleteSecret.id);
+              }}
+            >
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

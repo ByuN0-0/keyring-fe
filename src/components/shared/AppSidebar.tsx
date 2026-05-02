@@ -17,6 +17,16 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Folder as FolderIcon,
   Plus,
   Trash2,
@@ -146,7 +156,7 @@ function NavItem({
   folder: Folder;
   activeFolderId: string | null;
   onFolderSelect: (folderId: string | null) => void;
-  onDelete: (id: string) => void;
+  onDelete: (folder: Folder) => void;
   onRefresh: () => void;
   isOverlay?: boolean;
 }) {
@@ -167,8 +177,7 @@ function NavItem({
     if (!isEditing) onFolderSelect(folder.id);
   };
 
-  const handleRename = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleRename = async () => {
     const trimmed = editName.trim();
     if (!trimmed || trimmed === folder.name) {
       setIsEditing(false);
@@ -229,7 +238,10 @@ function NavItem({
             {/* Name */}
             {isEditing ? (
               <form
-                onSubmit={handleRename}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleRename();
+                }}
                 className="flex-1 min-w-0"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -238,9 +250,13 @@ function NavItem({
                   className="h-6 py-0 px-1 text-sm rounded border-slate-200 focus:ring-1"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  onBlur={() => {
-                    setIsEditing(false);
-                    setEditName(folder.name);
+                  onBlur={handleRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setIsEditing(false);
+                      setEditName(folder.name);
+                    }
                   }}
                 />
               </form>
@@ -252,8 +268,7 @@ function NavItem({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                if (confirm("이 폴더를 삭제하시겠습니까?"))
-                  onDelete(folder.id);
+                onDelete(folder);
               }}
               className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all opacity-0 group-hover:opacity-100 shrink-0"
             >
@@ -270,7 +285,7 @@ function NavItem({
           <ContextMenuItem
             className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer"
             onSelect={() => {
-              if (confirm("이 폴더를 삭제하시겠습니까?")) onDelete(folder.id);
+              onDelete(folder);
             }}
           >
             Delete
@@ -293,6 +308,9 @@ export function AppSidebar({
   const [isAddingRoot, setIsAddingRoot] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [pendingDeleteFolder, setPendingDeleteFolder] = useState<Folder | null>(
+    null
+  );
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -371,6 +389,7 @@ export function AppSidebar({
     try {
       await folderService.deleteFolder(id);
       if (activeFolderId === id) onFolderSelect(null);
+      setPendingDeleteFolder(null);
       onRefresh();
     } catch (err) {
       console.error("Failed to delete folder", err);
@@ -394,7 +413,7 @@ export function AppSidebar({
         folder={folder}
         activeFolderId={activeFolderId}
         onFolderSelect={onFolderSelect}
-        onDelete={handleDelete}
+        onDelete={setPendingDeleteFolder}
         onRefresh={onRefresh}
       />
     );
@@ -480,7 +499,7 @@ export function AppSidebar({
                     folder={activeFolder}
                     activeFolderId={activeFolderId}
                     onFolderSelect={onFolderSelect}
-                    onDelete={handleDelete}
+                    onDelete={setPendingDeleteFolder}
                     onRefresh={onRefresh}
                     isOverlay
                   />
@@ -496,6 +515,34 @@ export function AppSidebar({
           </div>
         </div>
       </ScrollArea>
+
+      <AlertDialog
+        open={Boolean(pendingDeleteFolder)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteFolder(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>폴더 삭제</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDeleteFolder?.name} 폴더를 삭제합니다. 폴더 안의
+              시크릿은 All Secrets로 이동됩니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => {
+                if (pendingDeleteFolder) handleDelete(pendingDeleteFolder.id);
+              }}
+            >
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   );
 }

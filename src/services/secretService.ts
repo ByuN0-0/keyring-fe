@@ -1,6 +1,12 @@
 import { axiosClient } from "../lib/api/axiosClient";
 import { Secret } from "../types";
 
+export interface SecretBatchPayload {
+  create: Partial<Secret>[];
+  update: Partial<Secret>[];
+  delete: string[];
+}
+
 export const secretService = {
   async getSecrets(folderId?: string | null): Promise<{ secrets: Secret[] }> {
     const params = folderId ? { folderId } : {};
@@ -23,6 +29,13 @@ export const secretService = {
 
   async deleteSecret(id: string): Promise<{ success: boolean }> {
     const { data } = await axiosClient.delete(`/secrets/${id}`);
+    return data;
+  },
+
+  async batchUpdateSecrets(
+    payload: SecretBatchPayload
+  ): Promise<{ success: boolean }> {
+    const { data } = await axiosClient.post("/secrets/batch", payload);
     return data;
   },
 };
